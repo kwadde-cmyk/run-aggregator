@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:xml/xml.dart';
 import 'google_health_auth.dart';
 
 class GoogleHealthService {
@@ -109,7 +110,6 @@ class GoogleHealthService {
 
     final preferred = fitbit.isNotEmpty ? fitbit : candidates;
 
-    // Sort chronologically
     preferred.sort((a, b) {
       final aT = a['distance']?['interval']?['startTime'] ?? '';
       final bT = b['distance']?['interval']?['startTime'] ?? '';
@@ -117,5 +117,50 @@ class GoogleHealthService {
     });
 
     return preferred;
+  }
+
+  /// Export GPS route as TCX and parse trackpoints.
+  static Future<List<Map<String, dynamic>>> getExerciseRoute(String exerciseName) async {
+    final token = await GoogleHealthAuth.getAccessToken();
+    if (token == null) throw Exception('Not logged in');
+
+    // exerciseName is like "users/me/dataTypes/exercise/dataPoints/123456"
+    final id = exerciseName.split('/').last;
+    final uri = Uri.parse(
+      '$_baseUrl/users/me/dataTypes/exercise/dataPoints/$id:exportExerciseTcx?alt=media',
+    );
+
+    final response = await http.get(
+      uri,
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Accept': 'application/tcx+xml, application/xml, text/xml',
+      },
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Failed to load route: ${response.statusCode}');
+    }
+
+    final doc = XmlDocument.parse(response.body);
+    final trackpoints = <Map<String, dynamic>>[];
+
+    for (final tp in doc.findAllElements('Trackpoint')) {
+      final lat = double.tryParse(tp.findElements('LatitudeDegrees').firstOrNull?.innerText ?? '');
+      final lon = double.tryParse(tp.findElements('LongitudeDegrees').firstOrNull?.innerText ?? '');
+      final time = tp.findElements('Time').firstOrNull?.innerText;
+      final dist = double.tryParse(tp.findElements('DistanceMeters').firstOrNull?.innerText ?? '');
+
+      if (lat != null && lon != null) {
+        trackpoints.add({
+          'lat': lat,
+          'lon': lon,
+          'time': time,
+          'distanceMeters': dist,
+        });
+      }
+    }
+
+    return trackpoints;
   }
 }
