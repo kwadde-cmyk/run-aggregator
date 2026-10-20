@@ -49,18 +49,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  String _formatExercise(Map<String, dynamic> point) {
-    final exercise = point['exercise'] as Map<String, dynamic>? ?? {};
-    final type = exercise['exerciseType'] ?? 'Unknown';
-    final name = exercise['displayName'] ?? '';
-    final interval = exercise['interval'] as Map<String, dynamic>? ?? {};
-    final start = interval['startTime'] ?? '';
-    final metrics = exercise['metricsSummary'] as Map<String, dynamic>? ?? {};
-    final distanceMm = metrics['distanceMillimeters'];
-    final distanceKm = distanceMm != null ? (distanceMm / 1000000).toStringAsFixed(2) : '-';
-    return '$type – $name\n$start · $distanceKm km';
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -104,9 +92,19 @@ class _HomeScreenState extends State<HomeScreen> {
                         itemCount: _exercises.length,
                         itemBuilder: (context, index) {
                           final item = _exercises[index];
+                          final exercise = item['exercise'] as Map<String, dynamic>? ?? {};
+                          final type = exercise['exerciseType'] ?? 'Unknown';
+                          final name = exercise['displayName'] ?? '';
+                          final interval = exercise['interval'] as Map<String, dynamic>? ?? {};
+                          final start = interval['startTime'] ?? '';
+                          final metrics = exercise['metricsSummary'] as Map<String, dynamic>? ?? {};
+                          final distanceMm = metrics['distanceMillimeters'];
+                          final distanceKm = distanceMm != null ? (distanceMm / 1000000).toStringAsFixed(2) : '-';
+
                           return ListTile(
-                            title: Text(_formatExercise(item)),
-                            isThreeLine: true,
+                            title: Text('$type – $name'),
+                            subtitle: Text('$start · $distanceKm km'),
+                            isThreeLine: false,
                           );
                         },
                       ),
