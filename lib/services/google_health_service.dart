@@ -35,7 +35,7 @@ class GoogleHealthService {
     return points.map((p) => p as Map<String, dynamic>).toList();
   }
 
-  /// Fetch distance points for a time range using pagination + client-side filter.
+  /// Fetch distance points for a time range, preferring a single source to avoid double-counting.
   static Future<List<Map<String, dynamic>>> getDistancePoints({
     required String startTime,
     required String endTime,
@@ -47,14 +47,14 @@ class GoogleHealthService {
     final end = DateTime.tryParse(endTime);
     if (start == null || end == null) return [];
 
-    final allPoints = <Map<String, dynamic>>[];
+    final candidates = <Map<String, dynamic>>[];
     String? pageToken;
     int pages = 0;
-    const maxPages = 10; // safety limit
+    const maxPages = 8;
 
     do {
       final query = {
-        'pageSize': '1000',
+        'pageSize': '500',
         if (pageToken != null) 'pageToken': pageToken!,
       };
       final uri = Uri.parse(
@@ -69,9 +69,7 @@ class GoogleHealthService {
         },
       );
 
-      if (response.statusCode != 200) {
-        throw Exception('Failed to load distance points: ${response.statusCode}');
-      }
+      if (response.statusCode != 200) break;
 
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       final points = (data['dataPoints'] as List<dynamic>? ?? [])
@@ -80,33 +78,44 @@ class GoogleHealthService {
 
       for (final p in points) {
         final interval = p['distance']?['interval'] as Map<String, dynamic>? ?? {};
-        final pStartStr = interval['startTime']?.toString();
-        final pStart = DateTime.tryParse(pStartStr ?? '');
-        if (pStart == null) continue;
-
-        // Include point if it overlaps the exercise window at all
-        final pEndStr = interval['endTime']?.toString();
-        final pEnd = DateTime.tryParse(pEndStr ?? '') ?? pStart;
+        final pStart = DateTime.tryParse(interval['startTime']?.toString() ?? '');
+        final pEnd = DateTime.tryParse(interval['endTime']?.toString() ?? '') ?? pStart;
+        if (pStart == null || pEnd == null) continue;
 
         if (pEnd.isAfter(start) && pStart.isBefore(end)) {
-          allPoints.add(p);
+          candidates.add(p);
         }
       }
 
       pageToken = data['nextPageToken'] as String?;
       pages++;
 
-      // Stop early if we've gone past the start of the exercise (points are usually newest-first)
       if (points.isNotEmpty) {
-        final oldestInPage = points.last;
-        final oldestInterval = oldestInPage['distance']?['interval'] as Map<String, dynamic>? ?? {};
-        final oldestStart = DateTime.tryParse(oldestInterval['startTime']?.toString() ?? '');
-        if (oldestStart != null && oldestStart.isBefore(start)) {
-          break;
-        }
+        final oldest = points.last;
+        final oldestStart = DateTime.tryParse(
+          (oldest['distance']?['interval']?['startTime'] ?? '').toString(),
+        );
+        if (oldestStart != null && oldestStart.isBefore(start)) break;
       }
     } while (pageToken != null && pages < maxPages);
 
-    return allPoints;
+    if (candidates.isEmpty) return [];
+
+    // Prefer FITBIT over HEALTH_CONNECT to avoid double counting
+    final fitbit = candidates.where((p) {
+      final platform = p['dataSource']?['platform']?.toString() ?? '';
+      return platform == 'FITBIT';
+    }).toList();
+
+    final preferred = fitbit.isNotEmpty ? fitbit : candidates;
+
+    // Sort chronologically
+    preferred.sort((a, b) {
+      final aT = a['distance']?['interval']?['startTime'] ?? '';
+      final bT = b['distance']?['interval']?['startTime'] ?? '';
+      return aT.toString().compareTo(bT.toString());
+    });
+
+    return preferred;
   }
 }
