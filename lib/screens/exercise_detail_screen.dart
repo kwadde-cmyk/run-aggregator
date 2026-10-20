@@ -54,14 +54,6 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
         _debugInfo = 'Distanzpunkte gefunden: ${distancePoints.length}';
       });
 
-      // DEBUG: Struktur des ersten Punkts ausgeben
-      if (distancePoints.isNotEmpty) {
-        // ignore: avoid_print
-        print('ERSTER DISTANZPUNKT: ${jsonEncode(distancePoints.first)}');
-        // ignore: avoid_print
-        print('ANZAHL DISTANZPUNKTE: ${distancePoints.length}');
-      }
-
       final calculated = _computeFixedDistanceSplits(distancePoints, _splitDistanceKm);
       setState(() {
         _splits = calculated;
@@ -98,7 +90,14 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
       final interval = dist['interval'] as Map<String, dynamic>? ?? {};
       final startTime = interval['startTime'] as String? ?? '';
       final endTime = interval['endTime'] as String? ?? '';
-      final distMm = (dist['distanceMillimeters'] as num?)?.toDouble() ?? 0;
+
+      // Google Health API uses "millimeters" (string) not "distanceMillimeters"
+      final mmRaw = dist['millimeters'];
+      final distMm = mmRaw is num
+          ? mmRaw.toDouble()
+          : double.tryParse(mmRaw?.toString() ?? '0') ?? 0;
+
+      if (distMm <= 0) continue;
 
       if (splitStart == null) splitStart = startTime;
 
