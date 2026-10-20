@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../services/google_health_service.dart';
 
@@ -52,6 +53,14 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
       setState(() {
         _debugInfo = 'Distanzpunkte gefunden: ${distancePoints.length}';
       });
+
+      // DEBUG: Struktur des ersten Punkts ausgeben
+      if (distancePoints.isNotEmpty) {
+        // ignore: avoid_print
+        print('ERSTER DISTANZPUNKT: ${jsonEncode(distancePoints.first)}');
+        // ignore: avoid_print
+        print('ANZAHL DISTANZPUNKTE: ${distancePoints.length}');
+      }
 
       final calculated = _computeFixedDistanceSplits(distancePoints, _splitDistanceKm);
       setState(() {
