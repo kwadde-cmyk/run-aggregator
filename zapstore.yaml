@@ -1,0 +1,14 @@
+# ZAPstore configuration
+# See https://zapstore.dev/docs/publish and zsp docs
+
+repository: https://github.com/kwadde-cmyk/run-aggregator
+# release_source defaults to repository (GitHub releases)
+
+# Optional metadata
+# summary: Aggregate running data with raw metrics, splits, filters and weather.
+# icon: assets/icon.png
+# images:
+#   - screenshots/1.png
+
+# For variants if needed
+# match: '.*arm64-v8a.*\.apk$'
