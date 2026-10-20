@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../services/google_health_auth.dart';
 import '../services/google_health_service.dart';
 import 'login_screen.dart';
+import 'exercise_detail_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -104,7 +105,13 @@ class _HomeScreenState extends State<HomeScreen> {
                           return ListTile(
                             title: Text('$type – $name'),
                             subtitle: Text('$start · $distanceKm km'),
-                            isThreeLine: false,
+                            onTap: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => ExerciseDetailScreen(exercisePoint: item),
+                                ),
+                              );
+                            },
                           );
                         },
                       ),
