@@ -1,0 +1,14 @@
+# Raspberry Pi 4 (4GB) optimized compose - serves pre-built Flutter web
+# Build web assets on your desktop first: flutter build web --release
+# Then copy build/web/* into ./web/ on the Pi
+
+services:
+  web:
+    image: nginx:alpine
+    container_name: run-aggregator-web
+    ports:
+      - "8080:80"
+    volumes:
+      - ./web:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
