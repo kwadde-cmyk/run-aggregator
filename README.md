@@ -51,6 +51,26 @@ For release APK: see GitHub Actions or local `flutter build apk --release` (requ
 docker compose up --build
 ```
 
+#### Raspberry Pi 4 (4GB) Hosting
+
+**Do not build Flutter on the Pi** – it is too resource-heavy. Build on your desktop instead.
+
+1. On your desktop (after Flutter is set up):
+   ```bash
+   flutter build web --release
+   ```
+
+2. Copy the contents of `build/web/` to a folder `web/` on the Raspberry Pi (e.g. via `scp` or `rsync`).
+
+3. On the Pi, in the directory that contains `web/` and the repo files:
+   ```bash
+   docker compose -f docker-compose.pi.yml up -d
+   ```
+
+The site will be available at `http://<pi-ip>:8080`.
+
+Uses the lightweight `nginx:alpine` image + `nginx.conf` for proper SPA routing.
+
 ### Data Sources
 
 - **Google Health / Fitbit**: Export via Google Takeout or Google Health app (TCX for GPS activities). API migration ongoing (Fitbit API ends ~Oct 2026). Prefer file imports for personal use.
