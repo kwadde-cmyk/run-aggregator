@@ -43,18 +43,33 @@ class GoogleHealthService {
     final token = await GoogleHealthAuth.getAccessToken();
     if (token == null) throw Exception('Not logged in');
 
+    // Versuch mit Filter
     final filter = 'distance.interval.start_time >= "$startTime" AND distance.interval.start_time < "$endTime"';
-    final uri = Uri.parse(
+    var uri = Uri.parse(
       '$_baseUrl/users/me/dataTypes/distance/dataPoints?filter=${Uri.encodeQueryComponent(filter)}&pageSize=1000',
     );
 
-    final response = await http.get(
+    var response = await http.get(
       uri,
       headers: {
         'Authorization': 'Bearer $token',
         'Accept': 'application/json',
       },
     );
+
+    // Debug: bei Problemen ohne Filter versuchen
+    if (response.statusCode != 200 || (jsonDecode(response.body) as Map)['dataPoints'] == null) {
+      uri = Uri.parse(
+        '$_baseUrl/users/me/dataTypes/distance/dataPoints?pageSize=100',
+      );
+      response = await http.get(
+        uri,
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Accept': 'application/json',
+        },
+      );
+    }
 
     if (response.statusCode != 200) {
       throw Exception('Failed to load distance points: ${response.statusCode} ${response.body}');
