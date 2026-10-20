@@ -1,6 +1,7 @@
-import 'dart:convert';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import '../services/google_health_service.dart';
 
 class ExerciseDetailScreen extends StatefulWidget {
@@ -19,10 +20,44 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
   String _debugInfo = '';
   double _splitDistanceKm = 1.0;
 
+  List<LatLng> _routePoints = [];
+  bool _loadingRoute = true;
+  String? _routeError;
+
   @override
   void initState() {
     super.initState();
     _calculateSplits();
+    _loadRoute();
+  }
+
+  Future<void> _loadRoute() async {
+    setState(() {
+      _loadingRoute = true;
+      _routeError = null;
+    });
+    try {
+      final name = widget.exercisePoint['name'] as String? ?? '';
+      if (name.isEmpty) {
+        setState(() {
+          _loadingRoute = false;
+          _routeError = 'Keine Exercise-ID';
+        });
+        return;
+      }
+      final points = await GoogleHealthService.getExerciseRoute(name);
+      setState(() {
+        _routePoints = points
+            .map((p) => LatLng(p['lat'] as double, p['lon'] as double))
+            .toList();
+        _loadingRoute = false;
+      });
+    } catch (e) {
+      setState(() {
+        _routeError = e.toString();
+        _loadingRoute = false;
+      });
+    }
   }
 
   Future<void> _calculateSplits() async {
@@ -110,7 +145,6 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
       cumulative += distMm;
 
       while (cumulative >= splitMm && splitStart != null) {
-        // Interpolate the exact end time inside the current point
         final overshootMm = cumulative - splitMm;
         final usedMm = distMm - overshootMm;
         final fraction = distMm > 0 ? usedMm / distMm : 1.0;
@@ -140,6 +174,73 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
     }
 
     return splits;
+  }
+
+  Widget _buildMap() {
+    if (_loadingRoute) {
+      return const SizedBox(
+        height: 280,
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (_routeError != null) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        child: Text('Route: $_routeError', style: const TextStyle(color: Colors.orange)),
+      );
+    }
+    if (_routePoints.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 16),
+        child: Text('Keine GPS-Punkte gefunden'),
+      );
+    }
+
+    final bounds = LatLngBounds.fromPoints(_routePoints);
+
+    return SizedBox(
+      height: 280,
+      child: FlutterMap(
+        options: MapOptions(
+          initialCenter: bounds.center,
+          initialZoom: 14,
+          interactionOptions: const InteractionOptions(
+            flags: InteractiveFlag.all,
+          ),
+        ),
+        children: [
+          TileLayer(
+            urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+            userAgentPackageName: 'de.kwadde.run_aggregator',
+          ),
+          PolylineLayer(
+            polylines: [
+              Polyline(
+                points: _routePoints,
+                color: Theme.of(context).colorScheme.primary,
+                strokeWidth: 4,
+              ),
+            ],
+          ),
+          MarkerLayer(
+            markers: [
+              Marker(
+                point: _routePoints.first,
+                width: 20,
+                height: 20,
+                child: const Icon(Icons.flag, color: Colors.green, size: 20),
+              ),
+              Marker(
+                point: _routePoints.last,
+                width: 20,
+                height: 20,
+                child: const Icon(Icons.flag, color: Colors.red, size: 20),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildSplitChart() {
@@ -234,6 +335,10 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
           Text('Durchschn. HF: $avgHr bpm'),
           Text('Kalorien: $calories'),
           Text('Durchschn. Pace: $paceMinKm min/km'),
+          const SizedBox(height: 16),
+          Text('Route', style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 8),
+          _buildMap(),
           const SizedBox(height: 24),
           Text('Pace pro Split', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 8),
