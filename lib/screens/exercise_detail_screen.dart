@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import '../services/google_health_service.dart';
 
@@ -91,7 +92,6 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
       final startTime = interval['startTime'] as String? ?? '';
       final endTime = interval['endTime'] as String? ?? '';
 
-      // Google Health API uses "millimeters" (string) not "distanceMillimeters"
       final mmRaw = dist['millimeters'];
       final distMm = mmRaw is num
           ? mmRaw.toDouble()
@@ -104,12 +104,19 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
       cumulative += distMm;
 
       while (cumulative >= splitMm && splitStart != null) {
+        final startDt = DateTime.tryParse(splitStart);
+        final endDt = DateTime.tryParse(endTime);
+        final durationSec = (startDt != null && endDt != null)
+            ? endDt.difference(startDt).inSeconds.toDouble()
+            : 0.0;
+
         splits.add({
           'index': splitIndex,
           'startTime': splitStart,
           'endTime': endTime,
           'distanceKm': splitKm,
-          'note': 'Feste $splitKm km',
+          'durationSec': durationSec,
+          'paceMinKm': durationSec > 0 ? durationSec / 60 / splitKm : 0,
         });
         cumulative -= splitMm;
         splitIndex++;
@@ -118,6 +125,64 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
     }
 
     return splits;
+  }
+
+  Widget _buildSplitChart() {
+    if (_splits.isEmpty) return const SizedBox.shrink();
+
+    final spots = <FlSpot>[];
+    for (var i = 0; i < _splits.length; i++) {
+      final pace = (_splits[i]['paceMinKm'] as num?)?.toDouble() ?? 0;
+      spots.add(FlSpot(i.toDouble() + 1, pace));
+    }
+
+    return SizedBox(
+      height: 220,
+      child: LineChart(
+        LineChartData(
+          gridData: const FlGridData(show: true),
+          titlesData: FlTitlesData(
+            bottomTitles: AxisTitles(
+              sideTitles: SideTitles(
+                showTitles: true,
+                reservedSize: 28,
+                getTitlesWidget: (value, meta) {
+                  final idx = value.toInt();
+                  if (idx < 1 || idx > _splits.length) return const SizedBox.shrink();
+                  return Text('$idx', style: const TextStyle(fontSize: 10));
+                },
+              ),
+            ),
+            leftTitles: AxisTitles(
+              sideTitles: SideTitles(
+                showTitles: true,
+                reservedSize: 40,
+                getTitlesWidget: (value, meta) => Text(
+                  value.toStringAsFixed(1),
+                  style: const TextStyle(fontSize: 10),
+                ),
+              ),
+            ),
+            topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          ),
+          borderData: FlBorderData(show: true),
+          lineBarsData: [
+            LineChartBarData(
+              spots: spots,
+              isCurved: true,
+              color: Theme.of(context).colorScheme.primary,
+              barWidth: 3,
+              dotData: const FlDotData(show: true),
+              belowBarData: BarAreaData(
+                show: true,
+                color: Theme.of(context).colorScheme.primary.withOpacity(0.15),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -153,6 +218,10 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
           Text('Kalorien: $calories'),
           Text('Durchschn. Pace: $paceMinKm min/km'),
           const SizedBox(height: 24),
+          Text('Pace pro Split', style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 8),
+          if (!_loadingSplits && _splits.isNotEmpty) _buildSplitChart(),
+          const SizedBox(height: 24),
           Row(
             children: [
               Text('Splits (alle $_splitDistanceKm km)', style: Theme.of(context).textTheme.titleLarge),
@@ -180,12 +249,16 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
           else if (_splits.isEmpty)
             const Text('Keine Distanzpunkte für Splits gefunden')
           else
-            ..._splits.map((split) => Card(
-                  child: ListTile(
-                    title: Text('Split ${split['index']} – ${split['distanceKm']} km'),
-                    subtitle: Text('${split['startTime']} → ${split['endTime']}'),
-                  ),
-                )),
+            ..._splits.map((split) {
+              final pace = (split['paceMinKm'] as num?)?.toStringAsFixed(2) ?? '-';
+              return Card(
+                child: ListTile(
+                  title: Text('Split ${split['index']} – ${split['distanceKm']} km'),
+                  subtitle: Text('${split['startTime']} → ${split['endTime']}'),
+                  trailing: Text('$pace min/km'),
+                ),
+              );
+            }),
         ],
       ),
     );
