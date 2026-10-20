@@ -137,7 +137,7 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
     }
 
     return SizedBox(
-      height: 220,
+      height: 240,
       child: LineChart(
         LineChartData(
           gridData: const FlGridData(show: true),
@@ -145,23 +145,25 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
             bottomTitles: AxisTitles(
               sideTitles: SideTitles(
                 showTitles: true,
-                reservedSize: 28,
+                reservedSize: 30,
                 getTitlesWidget: (value, meta) {
                   final idx = value.toInt();
                   if (idx < 1 || idx > _splits.length) return const SizedBox.shrink();
-                  return Text('$idx', style: const TextStyle(fontSize: 10));
+                  return Text('$idx', style: const TextStyle(fontSize: 11));
                 },
               ),
+              axisNameWidget: const Text('Split'),
             ),
             leftTitles: AxisTitles(
               sideTitles: SideTitles(
                 showTitles: true,
-                reservedSize: 40,
+                reservedSize: 48,
                 getTitlesWidget: (value, meta) => Text(
                   value.toStringAsFixed(1),
-                  style: const TextStyle(fontSize: 10),
+                  style: const TextStyle(fontSize: 11),
                 ),
               ),
+              axisNameWidget: const Text('min/km'),
             ),
             topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
             rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
