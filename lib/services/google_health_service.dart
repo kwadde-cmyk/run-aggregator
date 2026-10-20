@@ -35,7 +35,7 @@ class GoogleHealthService {
     return points.map((p) => p as Map<String, dynamic>).toList();
   }
 
-  /// Fetch distance data points for a given time range (for split calculation).
+  /// Fetch distance data points and filter them client-side to the exercise time range.
   static Future<List<Map<String, dynamic>>> getDistancePoints({
     required String startTime,
     required String endTime,
@@ -43,13 +43,12 @@ class GoogleHealthService {
     final token = await GoogleHealthAuth.getAccessToken();
     if (token == null) throw Exception('Not logged in');
 
-    // Versuch mit Filter
-    final filter = 'distance.interval.start_time >= "$startTime" AND distance.interval.start_time < "$endTime"';
-    var uri = Uri.parse(
-      '$_baseUrl/users/me/dataTypes/distance/dataPoints?filter=${Uri.encodeQueryComponent(filter)}&pageSize=1000',
+    // Fetch a larger page and filter locally (API filter is unreliable)
+    final uri = Uri.parse(
+      '$_baseUrl/users/me/dataTypes/distance/dataPoints?pageSize=1000',
     );
 
-    var response = await http.get(
+    final response = await http.get(
       uri,
       headers: {
         'Authorization': 'Bearer $token',
@@ -57,26 +56,24 @@ class GoogleHealthService {
       },
     );
 
-    // Debug: bei Problemen ohne Filter versuchen
-    if (response.statusCode != 200 || (jsonDecode(response.body) as Map)['dataPoints'] == null) {
-      uri = Uri.parse(
-        '$_baseUrl/users/me/dataTypes/distance/dataPoints?pageSize=100',
-      );
-      response = await http.get(
-        uri,
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Accept': 'application/json',
-        },
-      );
-    }
-
     if (response.statusCode != 200) {
       throw Exception('Failed to load distance points: ${response.statusCode} ${response.body}');
     }
 
     final data = jsonDecode(response.body) as Map<String, dynamic>;
-    final points = data['dataPoints'] as List<dynamic>? ?? [];
-    return points.map((p) => p as Map<String, dynamic>).toList();
+    final points = (data['dataPoints'] as List<dynamic>? ?? [])
+        .map((p) => p as Map<String, dynamic>)
+        .toList();
+
+    final start = DateTime.tryParse(startTime);
+    final end = DateTime.tryParse(endTime);
+    if (start == null || end == null) return points;
+
+    return points.where((p) {
+      final interval = p['distance']?['interval'] as Map<String, dynamic>? ?? {};
+      final pStart = DateTime.tryParse(interval['startTime']?.toString() ?? '');
+      if (pStart == null) return false;
+      return !pStart.isBefore(start) && pStart.isBefore(end);
+    }).toList();
   }
 }
