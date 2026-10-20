@@ -34,4 +34,34 @@ class GoogleHealthService {
 
     return points.map((p) => p as Map<String, dynamic>).toList();
   }
+
+  /// Fetch distance data points for a given time range (for split calculation).
+  static Future<List<Map<String, dynamic>>> getDistancePoints({
+    required String startTime,
+    required String endTime,
+  }) async {
+    final token = await GoogleHealthAuth.getAccessToken();
+    if (token == null) throw Exception('Not logged in');
+
+    final filter = 'distance.interval.start_time >= "$startTime" AND distance.interval.start_time < "$endTime"';
+    final uri = Uri.parse(
+      '$_baseUrl/users/me/dataTypes/distance/dataPoints?filter=${Uri.encodeQueryComponent(filter)}&pageSize=1000',
+    );
+
+    final response = await http.get(
+      uri,
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Accept': 'application/json',
+      },
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Failed to load distance points: ${response.statusCode} ${response.body}');
+    }
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    final points = data['dataPoints'] as List<dynamic>? ?? [];
+    return points.map((p) => p as Map<String, dynamic>).toList();
+  }
 }
