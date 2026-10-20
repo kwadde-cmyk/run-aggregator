@@ -1,0 +1,7 @@
+version: '3.8'
+services:
+  run-aggregator:
+    build: .
+    ports:
+      - "8080:80"
+    restart: unless-stopped
