@@ -34,8 +34,19 @@ class _HomeScreenState extends State<HomeScreen> {
         _loading = false;
       });
     } catch (e) {
+      final msg = e.toString();
+      // Bei 401 automatisch ausloggen und zum Login zurück
+      if (msg.contains('401') || msg.contains('UNAUTHENTICATED')) {
+        await GoogleHealthAuth.logout();
+        if (mounted) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => const LoginScreen()),
+          );
+        }
+        return;
+      }
       setState(() {
-        _error = e.toString();
+        _error = msg;
         _loading = false;
       });
     }
