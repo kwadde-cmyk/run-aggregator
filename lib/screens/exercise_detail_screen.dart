@@ -14,7 +14,8 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
   List<Map<String, dynamic>> _splits = [];
   bool _loadingSplits = true;
   String? _splitError;
-  double _splitDistanceKm = 1.0; // einstellbar
+  String _debugInfo = '';
+  double _splitDistanceKm = 1.0;
 
   @override
   void initState() {
@@ -26,6 +27,7 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
     setState(() {
       _loadingSplits = true;
       _splitError = null;
+      _debugInfo = '';
     });
 
     try {
@@ -47,7 +49,10 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
         endTime: end,
       );
 
-      // Einfache feste-Distanz-Splits (1 km Standard)
+      setState(() {
+        _debugInfo = 'Distanzpunkte gefunden: ${distancePoints.length}';
+      });
+
       final calculated = _computeFixedDistanceSplits(distancePoints, _splitDistanceKm);
       setState(() {
         _splits = calculated;
@@ -73,7 +78,6 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
     int splitIndex = 1;
     String? splitStart;
 
-    // Sortieren nach Startzeit
     points.sort((a, b) {
       final aInt = a['distance']?['interval']?['startTime'] ?? '';
       final bInt = b['distance']?['interval']?['startTime'] ?? '';
@@ -97,7 +101,6 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
           'startTime': splitStart,
           'endTime': endTime,
           'distanceKm': splitKm,
-          // Dauer müsste aus Zeitdifferenz berechnet werden – vereinfacht
           'note': 'Feste $splitKm km',
         });
         cumulative -= splitMm;
@@ -161,6 +164,7 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
             ],
           ),
           const SizedBox(height: 8),
+          if (_debugInfo.isNotEmpty) Text(_debugInfo, style: const TextStyle(color: Colors.grey)),
           if (_loadingSplits)
             const Center(child: CircularProgressIndicator())
           else if (_splitError != null)
