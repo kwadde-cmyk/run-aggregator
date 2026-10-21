@@ -71,7 +71,9 @@ class RunkeeperService {
     final startStr = _formatDate(start);
     final endStr = _formatDate(end);
 
-    // Submit classic export
+    // Submit PORTABILITY export (contains GPX with HR)
+    // ignore: avoid_print
+    print('Runkeeper: submitting portability export $startStr → $endStr');
     final exportRes = await http.post(
       Uri.parse('https://runkeeper.com/exportData'),
       headers: {
@@ -80,8 +82,7 @@ class RunkeeperService {
         'User-Agent': 'Mozilla/5.0',
       },
       body: {
-        '_eventName': 'handleExport',
-        'exportType': 'CLASSIC',
+        '_eventName': 'handlePortabilityExport',
         'startDate': startStr,
         'endDate': endStr,
       },
