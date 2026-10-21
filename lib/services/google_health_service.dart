@@ -102,7 +102,6 @@ class GoogleHealthService {
 
     if (candidates.isEmpty) return [];
 
-    // Prefer FITBIT over HEALTH_CONNECT to avoid double counting
     final fitbit = candidates.where((p) {
       final platform = p['dataSource']?['platform']?.toString() ?? '';
       return platform == 'FITBIT';
@@ -119,12 +118,11 @@ class GoogleHealthService {
     return preferred;
   }
 
-  /// Export GPS route as TCX and parse trackpoints.
+  /// Export GPS route as TCX and parse trackpoints (namespace-aware).
   static Future<List<Map<String, dynamic>>> getExerciseRoute(String exerciseName) async {
     final token = await GoogleHealthAuth.getAccessToken();
     if (token == null) throw Exception('Not logged in');
 
-    // exerciseName is like "users/me/dataTypes/exercise/dataPoints/123456"
     final id = exerciseName.split('/').last;
     final uri = Uri.parse(
       '$_baseUrl/users/me/dataTypes/exercise/dataPoints/$id:exportExerciseTcx?alt=media',
@@ -134,22 +132,32 @@ class GoogleHealthService {
       uri,
       headers: {
         'Authorization': 'Bearer $token',
-        'Accept': 'application/tcx+xml, application/xml, text/xml',
+        'Accept': 'application/tcx+xml, application/xml, text/xml, */*',
       },
     );
 
     if (response.statusCode != 200) {
-      throw Exception('Failed to load route: ${response.statusCode}');
+      throw Exception('Failed to load route: ${response.statusCode} ${response.body.substring(0, response.body.length.clamp(0, 200))}');
     }
 
     final doc = XmlDocument.parse(response.body);
-    final trackpoints = <Map<String, dynamic>>[];
 
-    for (final tp in doc.findAllElements('Trackpoint')) {
-      final lat = double.tryParse(tp.findElements('LatitudeDegrees').firstOrNull?.innerText ?? '');
-      final lon = double.tryParse(tp.findElements('LongitudeDegrees').firstOrNull?.innerText ?? '');
-      final time = tp.findElements('Time').firstOrNull?.innerText;
-      final dist = double.tryParse(tp.findElements('DistanceMeters').firstOrNull?.innerText ?? '');
+    // TCX uses a default namespace – match by local name
+    final trackpoints = <Map<String, dynamic>>[];
+    for (final tp in doc.descendants.whereType<XmlElement>()) {
+      if (tp.name.local != 'Trackpoint') continue;
+
+      String? findText(String localName) {
+        for (final child in tp.descendants.whereType<XmlElement>()) {
+          if (child.name.local == localName) return child.innerText;
+        }
+        return null;
+      }
+
+      final lat = double.tryParse(findText('LatitudeDegrees') ?? '');
+      final lon = double.tryParse(findText('LongitudeDegrees') ?? '');
+      final time = findText('Time');
+      final dist = double.tryParse(findText('DistanceMeters') ?? '');
 
       if (lat != null && lon != null) {
         trackpoints.add({
