@@ -29,6 +29,8 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
   bool _loadingHr = true;
   String _hrDebug = '';
 
+  List<Map<String, dynamic>> _distancePoints = [];
+
   @override
   void initState() {
     super.initState();
@@ -127,6 +129,7 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
       );
 
       setState(() {
+        _distancePoints = distancePoints;
         _debugInfo = 'Distanzpunkte gefunden: ${distancePoints.length}';
       });
 
@@ -287,55 +290,55 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
     );
   }
 
-  Widget _buildSplitChart() {
-    if (_splits.isEmpty) return const SizedBox.shrink();
-
-    final speedSpots = <FlSpot>[];
-    for (var i = 0; i < _splits.length; i++) {
-      final value = _showKmh
-          ? (_splits[i]['kmh'] as num?)?.toDouble() ?? 0
-          : (_splits[i]['paceMinKm'] as num?)?.toDouble() ?? 0;
-      speedSpots.add(FlSpot(i.toDouble() + 1, value));
+  Widget _buildRawChart() {
+    if (_hrPoints.isEmpty && _distancePoints.isEmpty) {
+      return const SizedBox.shrink();
     }
 
-    final hrAvgs = <double>[];
-    for (var i = 0; i < _splits.length; i++) {
-      final splitStart = DateTime.tryParse(_splits[i]['startTime'] ?? '');
-      final splitEnd = DateTime.tryParse(_splits[i]['endTime'] ?? '');
-      if (splitStart == null || splitEnd == null || _hrPoints.isEmpty) {
-        hrAvgs.add(0);
-        continue;
-      }
-      final inSplit = _hrPoints.where((p) {
-        final t = DateTime.tryParse(p['time'] ?? '');
-        return t != null && !t.isBefore(splitStart) && t.isBefore(splitEnd);
-      }).toList();
-      if (inSplit.isEmpty) {
-        hrAvgs.add(0);
-      } else {
-        final avg = inSplit.map((p) => (p['bpm'] as num).toDouble()).reduce((a, b) => a + b) / inSplit.length;
-        hrAvgs.add(avg);
-      }
-    }
+    final exercise = widget.exercisePoint['exercise'] as Map<String, dynamic>? ?? {};
+    final interval = exercise['interval'] as Map<String, dynamic>? ?? {};
+    final startStr = interval['startTime'] as String? ?? '';
+    final start = DateTime.tryParse(startStr);
+    if (start == null) return const SizedBox.shrink();
 
-    final validHr = hrAvgs.where((v) => v > 0).toList();
-    final hasHr = validHr.isNotEmpty;
-    final hrMin = hasHr ? validHr.reduce((a, b) => a < b ? a : b) : 60.0;
-    final hrMax = hasHr ? validHr.reduce((a, b) => a > b ? a : b) : 180.0;
-
-    // Always map HR into the visible speed range so the line appears
-    final speedVals = speedSpots.map((s) => s.y).toList();
-    final sMin = speedVals.reduce((a, b) => a < b ? a : b);
-    final sMax = speedVals.reduce((a, b) => a > b ? a : b);
-    final sRange = (sMax - sMin).abs() < 0.2 ? 1.0 : (sMax - sMin);
-
+    // HR spots (minutes from start)
     final hrSpots = <FlSpot>[];
-    for (var i = 0; i < hrAvgs.length; i++) {
-      if (hrAvgs[i] <= 0) continue;
-      final t = (hrAvgs[i] - hrMin) / ((hrMax - hrMin).abs() < 1 ? 1 : (hrMax - hrMin));
-      final y = sMin + t * sRange;
-      hrSpots.add(FlSpot(i.toDouble() + 1, y));
+    for (final p in _hrPoints) {
+      final t = DateTime.tryParse(p['time'] ?? '');
+      final bpm = (p['bpm'] as num?)?.toDouble();
+      if (t == null || bpm == null) continue;
+      final minutes = t.difference(start).inSeconds / 60.0;
+      if (minutes >= 0) hrSpots.add(FlSpot(minutes, bpm));
     }
+
+    // Pace/speed from distance points (1-min resolution)
+    final speedSpots = <FlSpot>[];
+    for (final p in _distancePoints) {
+      final dist = p['distance'] as Map<String, dynamic>? ?? {};
+      final interval = dist['interval'] as Map<String, dynamic>? ?? {};
+      final tStart = DateTime.tryParse(interval['startTime']?.toString() ?? '');
+      final tEnd = DateTime.tryParse(interval['endTime']?.toString() ?? '');
+      final mmRaw = dist['millimeters'];
+      final mm = mmRaw is num ? mmRaw.toDouble() : double.tryParse(mmRaw?.toString() ?? '0') ?? 0;
+      if (tStart == null || tEnd == null || mm <= 0) continue;
+
+      final sec = tEnd.difference(tStart).inSeconds;
+      if (sec <= 0) continue;
+      final km = mm / 1000000.0;
+      final paceMinKm = (sec / 60.0) / km;
+      final kmh = paceMinKm > 0 ? 60.0 / paceMinKm : 0;
+      final minutes = tStart.difference(start).inSeconds / 60.0;
+      final value = _showKmh ? kmh : paceMinKm;
+      if (minutes >= 0 && value > 0 && value < 30) {
+        speedSpots.add(FlSpot(minutes, value));
+      }
+    }
+
+    if (hrSpots.isEmpty && speedSpots.isEmpty) return const SizedBox.shrink();
+
+    final allX = [...hrSpots, ...speedSpots].map((s) => s.x);
+    final minX = allX.isEmpty ? 0.0 : allX.reduce((a, b) => a < b ? a : b);
+    final maxX = allX.isEmpty ? 1.0 : allX.reduce((a, b) => a > b ? a : b);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -357,68 +360,69 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
           ],
         ),
         SizedBox(
-          height: 270,
+          height: 280,
           child: LineChart(
             LineChartData(
-              minY: sMin - sRange * 0.08,
-              maxY: sMax + sRange * 0.08,
+              minX: minX,
+              maxX: maxX,
               gridData: const FlGridData(show: true),
               titlesData: FlTitlesData(
                 bottomTitles: AxisTitles(
                   sideTitles: SideTitles(
                     showTitles: true,
-                    reservedSize: 28,
+                    reservedSize: 32,
                     getTitlesWidget: (value, meta) {
-                      final idx = value.toInt();
-                      if (idx < 1 || idx > _splits.length) return const SizedBox.shrink();
-                      return Text('$idx', style: const TextStyle(fontSize: 11));
+                      return Text('${value.toStringAsFixed(0)}', style: const TextStyle(fontSize: 10));
                     },
                   ),
-                  axisNameWidget: const Text('Split'),
+                  axisNameWidget: const Text('Minuten'),
                 ),
                 leftTitles: AxisTitles(
                   sideTitles: SideTitles(
-                    showTitles: true,
-                    reservedSize: 46,
+                    showTitles: speedSpots.isNotEmpty,
+                    reservedSize: 42,
                     getTitlesWidget: (value, meta) => Text(
                       value.toStringAsFixed(1),
                       style: const TextStyle(fontSize: 10, color: Colors.blue),
                     ),
                   ),
-                  axisNameWidget: Text(_showKmh ? 'km/h' : 'min/km', style: const TextStyle(color: Colors.blue, fontSize: 12)),
+                  axisNameWidget: speedSpots.isNotEmpty
+                      ? Text(_showKmh ? 'km/h' : 'min/km', style: const TextStyle(color: Colors.blue, fontSize: 12))
+                      : null,
                 ),
                 rightTitles: AxisTitles(
                   sideTitles: SideTitles(
-                    showTitles: hasHr,
+                    showTitles: hrSpots.isNotEmpty,
                     reservedSize: 40,
-                    getTitlesWidget: (value, meta) {
-                      if (!hasHr) return const SizedBox.shrink();
-                      final t = (value - sMin) / sRange;
-                      final bpm = hrMin + t * (hrMax - hrMin);
-                      return Text(bpm.toStringAsFixed(0), style: const TextStyle(fontSize: 10, color: Colors.red));
-                    },
+                    getTitlesWidget: (value, meta) => Text(
+                      value.toStringAsFixed(0),
+                      style: const TextStyle(fontSize: 10, color: Colors.red),
+                    ),
                   ),
-                  axisNameWidget: hasHr ? const Text('bpm', style: TextStyle(color: Colors.red, fontSize: 12)) : null,
+                  axisNameWidget: hrSpots.isNotEmpty
+                      ? const Text('bpm', style: TextStyle(color: Colors.red, fontSize: 12))
+                      : null,
                 ),
                 topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
               ),
               borderData: FlBorderData(show: true),
               lineBarsData: [
-                LineChartBarData(
-                  spots: speedSpots,
-                  isCurved: true,
-                  color: Colors.blue,
-                  barWidth: 3,
-                  dotData: const FlDotData(show: true),
-                  belowBarData: BarAreaData(show: true, color: Colors.blue.withOpacity(0.1)),
-                ),
+                if (speedSpots.isNotEmpty)
+                  LineChartBarData(
+                    spots: speedSpots,
+                    isCurved: true,
+                    color: Colors.blue,
+                    barWidth: 2,
+                    dotData: const FlDotData(show: false),
+                    belowBarData: BarAreaData(show: true, color: Colors.blue.withOpacity(0.08)),
+                  ),
                 if (hrSpots.isNotEmpty)
                   LineChartBarData(
                     spots: hrSpots,
                     isCurved: true,
                     color: Colors.red,
-                    barWidth: 3,
-                    dotData: const FlDotData(show: true),
+                    barWidth: 2,
+                    dotData: const FlDotData(show: false),
                     belowBarData: BarAreaData(show: false),
                   ),
               ],
@@ -466,12 +470,12 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
           const SizedBox(height: 8),
           _buildMap(),
           const SizedBox(height: 24),
-          Text('Tempo & Herzfrequenz pro Split', style: Theme.of(context).textTheme.titleLarge),
+          Text('Tempo & Herzfrequenz (Rohdaten)', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 8),
           if (_loadingHr || _loadingSplits)
             const Center(child: CircularProgressIndicator())
-          else if (_splits.isNotEmpty)
-            _buildSplitChart(),
+          else
+            _buildRawChart(),
           const SizedBox(height: 24),
           Row(
             children: [
