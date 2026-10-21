@@ -14,6 +14,7 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import requests
 from playwright.async_api import async_playwright
 
 COOKIES_FILE = Path(__file__).parent / "cookies.json"
@@ -69,65 +70,54 @@ async def main(days: int = 10):
         await start_btn.click()
         print("Waiting for export to be prepared (up to 3 min)...")
 
-        # Poll for a download link / button
-        download_link = None
-        for attempt in range(36):  # 3 minutes
+        # Poll for a download link
+        download_href = None
+        for attempt in range(36):
             await page.wait_for_timeout(5000)
-            # Reload to see updated status
             try:
                 await page.reload(wait_until="domcontentloaded")
             except Exception:
                 pass
 
-            download_link = await page.query_selector(
-                "a:has-text('Download'), a:has-text('Download Now'), button:has-text('Download'), a[href*='.zip'], a[href*='export']"
+            link = await page.query_selector(
+                "a:has-text('Download'), a:has-text('Download Now'), a[href*='.zip'], a[href*='export']"
             )
-            if download_link:
-                print(f"Download link found after ~{(attempt+1)*5}s")
+            if link:
+                download_href = await link.get_attribute("href")
+                print(f"Download link found after ~{(attempt+1)*5}s: {download_href}")
                 break
             print(f"  still waiting... ({(attempt+1)*5}s)")
 
-        if not download_link:
+        if not download_href:
             print("No download link appeared. Final page snippet:")
             print((await page.content())[:3000])
             await browser.close()
             return
 
-        # Click the download link and capture the file
-        print("Clicking download link...")
-        try:
-            async with page.expect_download(timeout=60000) as download_info:
-                await download_link.click()
-            download = await download_info.value
+        # Normalize href
+        if download_href.startswith("/"):
+            download_href = "https://runkeeper.com" + download_href
+        print(f"Downloading from: {download_href}")
+
+        # Use requests with the same cookies
+        pw_cookies = await context.cookies()
+        session = requests.Session()
+        for c in pw_cookies:
+            session.cookies.set(c["name"], c["value"], domain=c.get("domain") or "")
+
+        r = session.get(download_href, allow_redirects=True, timeout=120)
+        print(f"Download status: {r.status_code}, size: {len(r.content)} bytes")
+
+        if r.status_code == 200 and len(r.content) > 1000:
             end = datetime.utcnow().date()
             start = end - timedelta(days=days)
             filename = DOWNLOAD_DIR / f"runkeeper-export-{start}-{end}.zip"
-            await download.save_as(filename)
-            print(f"Downloaded: {filename}")
-        except Exception as e:
-            print(f"Download failed: {e}")
-            # Try to get the href and download via requests as fallback
-            href = await download_link.get_attribute("href")
-            if href:
-                print(f"Download href: {href}")
-                if href.startswith("/"):
-                    href = "https://runkeeper.com" + href
-                print("Trying direct download via requests...")
-                import requests
-                # Get cookies from context for requests
-                pw_cookies = await context.cookies()
-                session = requests.Session()
-                for c in pw_cookies:
-                    session.cookies.set(c["name"], c["value"], domain=c.get("domain", ""))
-                r = session.get(href, allow_redirects=True)
-                if r.status_code == 200:
-                    end = datetime.utcnow().date()
-                    start = end - timedelta(days=days)
-                    filename = DOWNLOAD_DIR / f"runkeeper-export-{start}-{end}.zip"
-                    filename.write_bytes(r.content)
-                    print(f"Saved via requests: {filename} ({len(r.content)} bytes)")
-                else:
-                    print(f"Requests download failed: {r.status_code}")
+            filename.write_bytes(r.content)
+            print(f"Saved: {filename}")
+        else:
+            print("Download failed or file too small. Response headers:")
+            print(dict(r.headers))
+            print("Body snippet:", r.text[:500] if r.text else "(binary)")
 
         await browser.close()
 
