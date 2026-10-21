@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
 """
-Runkeeper Export Downloader for Raspberry Pi.
+Runkeeper Export Downloader for Raspberry Pi (headless).
 
-Uses Playwright to log in once (interactive OTP) and then download exports.
-Session is persisted in a browser profile.
+Session is stored in ~/.runkeeper-profile.
 
-Usage:
-  # First run (interactive login):
+First login (do this on a machine with a browser, or use xvfb):
   python3 export_runkeeper.py --login
 
-  # Later runs (download last 10 days):
+Or copy an existing profile from another machine.
+
+Then on the Pi:
   python3 export_runkeeper.py --days 10
 """
 
 import argparse
 import asyncio
-import os
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -30,54 +29,68 @@ async def main(login_only: bool = False, days: int = 10):
     async with async_playwright() as p:
         context = await p.chromium.launch_persistent_context(
             user_data_dir=str(PROFILE_DIR),
-            headless=not login_only,
+            headless=True,  # always headless on Pi
             accept_downloads=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage"],
+            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
         )
 
         page = await context.new_page()
 
         if login_only:
-            print("Opening Runkeeper login. Complete the email code login in the browser window.")
-            await page.goto("https://runkeeper.com/login")
-            input("Press Enter after you have successfully logged in...")
-            print("Session saved. You can close the browser.")
+            print("Headless login is not interactive.")
+            print("Options:")
+            print("  1. Run this script on a desktop with a display first, then copy ~/.runkeeper-profile to the Pi.")
+            print("  2. Or install xvfb and run: xvfb-run python3 export_runkeeper.py --login")
+            print("  3. Or manually export a cookie/session and place it in the profile.")
             await context.close()
             return
 
         # Check if logged in
-        await page.goto("https://runkeeper.com/settings")
-        if "login" in page.url:
-            print("Not logged in. Run with --login first.")
+        await page.goto("https://runkeeper.com/settings", wait_until="domcontentloaded")
+        await page.wait_for_timeout(2000)
+        if "login" in page.url.lower():
+            print("Not logged in. You need a valid session profile in ~/.runkeeper-profile")
+            print("Do the login on a machine with a GUI and copy the profile folder, or use xvfb-run.")
             await context.close()
             return
 
         print("Logged in. Going to export page...")
-        await page.goto("https://runkeeper.com/exportData")
+        await page.goto("https://runkeeper.com/exportData", wait_until="domcontentloaded")
+        await page.wait_for_timeout(2000)
 
         # Set date range (last N days)
         end = datetime.utcnow().date()
         start = end - timedelta(days=days)
 
-        # These selectors may need adjustment if Runkeeper changes the page
-        await page.fill("input[name='startDate']", start.strftime("%Y-%m-%d"))
-        await page.fill("input[name='endDate']", end.strftime("%Y-%m-%d"))
+        # Selectors may need adjustment if the page changes
+        try:
+            await page.fill("input[name='startDate'], input[placeholder*='Start']", start.strftime("%Y-%m-%d"))
+            await page.fill("input[name='endDate'], input[placeholder*='End']", end.strftime("%Y-%m-%d"))
+        except Exception as e:
+            print(f"Could not fill date fields: {e}")
+            print("Page content snippet:")
+            print(await page.content()[:1500])
+            await context.close()
+            return
 
-        # Trigger export
-        async with page.expect_download() as download_info:
-            await page.click("button:has-text('Export Data')")
-        download = await download_info.value
-
-        filename = DOWNLOAD_DIR / f"runkeeper-export-{start}-{end}.zip"
-        await download.save_as(filename)
-        print(f"Downloaded: {filename}")
+        # Trigger export and download
+        try:
+            async with page.expect_download(timeout=120000) as download_info:
+                await page.click("button:has-text('Export Data'), button:has-text('Export')")
+            download = await download_info.value
+            filename = DOWNLOAD_DIR / f"runkeeper-export-{start}-{end}.zip"
+            await download.save_as(filename)
+            print(f"Downloaded: {filename}")
+        except Exception as e:
+            print(f"Export/download failed: {e}")
+            print("You may need to adjust the button selector. Current URL:", page.url)
 
         await context.close()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--login", action="store_true", help="Interactive login")
+    parser.add_argument("--login", action="store_true", help="Show login instructions")
     parser.add_argument("--days", type=int, default=10, help="Days to export")
     args = parser.parse_args()
 
