@@ -2,13 +2,21 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:xml/xml.dart';
 import 'google_health_auth.dart';
+import 'data_cache.dart';
 
 class GoogleHealthService {
   static const _baseUrl = 'https://health.googleapis.com/v4';
 
   static Future<List<Map<String, dynamic>>> getExercises({
     int pageSize = 20,
+    bool forceRefresh = false,
   }) async {
+    const key = 'exercises';
+    if (!forceRefresh) {
+      final cached = DataCache.get<List<Map<String, dynamic>>>(key);
+      if (cached != null) return cached;
+    }
+
     final token = await GoogleHealthAuth.getAccessToken();
     if (token == null) {
       throw Exception('Not logged in');
@@ -31,16 +39,26 @@ class GoogleHealthService {
     }
 
     final data = jsonDecode(response.body) as Map<String, dynamic>;
-    final points = data['dataPoints'] as List<dynamic>? ?? [];
+    final points = (data['dataPoints'] as List<dynamic>? ?? [])
+        .map((p) => p as Map<String, dynamic>)
+        .toList();
 
-    return points.map((p) => p as Map<String, dynamic>).toList();
+    DataCache.set(key, points);
+    return points;
   }
 
   /// Fetch distance points for a time range, preferring a single source to avoid double-counting.
   static Future<List<Map<String, dynamic>>> getDistancePoints({
     required String startTime,
     required String endTime,
+    bool forceRefresh = false,
   }) async {
+    final key = 'distance|$startTime|$endTime';
+    if (!forceRefresh) {
+      final cached = DataCache.get<List<Map<String, dynamic>>>(key);
+      if (cached != null) return cached;
+    }
+
     final token = await GoogleHealthAuth.getAccessToken();
     if (token == null) throw Exception('Not logged in');
 
@@ -100,7 +118,10 @@ class GoogleHealthService {
       }
     } while (pageToken != null && pages < maxPages);
 
-    if (candidates.isEmpty) return [];
+    if (candidates.isEmpty) {
+      DataCache.set(key, <Map<String, dynamic>>[]);
+      return [];
+    }
 
     final fitbit = candidates.where((p) {
       final platform = p['dataSource']?['platform']?.toString() ?? '';
@@ -115,15 +136,22 @@ class GoogleHealthService {
       return aT.toString().compareTo(bT.toString());
     });
 
+    DataCache.set(key, preferred);
     return preferred;
   }
 
   /// Fetch heart-rate samples for a time range.
-  /// Continues paging until we have passed the start of the exercise.
   static Future<List<Map<String, dynamic>>> getHeartRatePoints({
     required String startTime,
     required String endTime,
+    bool forceRefresh = false,
   }) async {
+    final key = 'hr|$startTime|$endTime';
+    if (!forceRefresh) {
+      final cached = DataCache.get<List<Map<String, dynamic>>>(key);
+      if (cached != null) return cached;
+    }
+
     final token = await GoogleHealthAuth.getAccessToken();
     if (token == null) throw Exception('Not logged in');
 
@@ -190,7 +218,6 @@ class GoogleHealthService {
       pageToken = data['nextPageToken'] as String?;
       pages++;
 
-      // Stop once we have data and have gone past the start, or hit limits
       if (reachedBeforeStart && results.isNotEmpty) break;
       if (results.length > 600) break;
     } while (pageToken != null && pages < maxPages);
@@ -198,11 +225,21 @@ class GoogleHealthService {
     results.sort((a, b) => (a['time'] as String).compareTo(b['time'] as String));
     // ignore: avoid_print
     print('HF-Punkte nach Filter: ${results.length} (pages: $pages)');
+    DataCache.set(key, results);
     return results;
   }
 
   /// Export GPS route as TCX and parse trackpoints (namespace-aware).
-  static Future<List<Map<String, dynamic>>> getExerciseRoute(String exerciseName) async {
+  static Future<List<Map<String, dynamic>>> getExerciseRoute(
+    String exerciseName, {
+    bool forceRefresh = false,
+  }) async {
+    final key = 'route|$exerciseName';
+    if (!forceRefresh) {
+      final cached = DataCache.get<List<Map<String, dynamic>>>(key);
+      if (cached != null) return cached;
+    }
+
     final token = await GoogleHealthAuth.getAccessToken();
     if (token == null) throw Exception('Not logged in');
 
@@ -251,6 +288,9 @@ class GoogleHealthService {
       }
     }
 
+    DataCache.set(key, trackpoints);
     return trackpoints;
   }
+
+  static void clearCache() => DataCache.clear();
 }
