@@ -22,20 +22,20 @@ class _HomeScreenState extends State<HomeScreen> {
     _loadExercises();
   }
 
-  Future<void> _loadExercises() async {
+  Future<void> _loadExercises({bool forceRefresh = false}) async {
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
-      final data = await GoogleHealthService.getExercises();
+      if (forceRefresh) GoogleHealthService.clearCache();
+      final data = await GoogleHealthService.getExercises(forceRefresh: forceRefresh);
       setState(() {
         _exercises = data;
         _loading = false;
       });
     } catch (e) {
       final msg = e.toString();
-      // Bei 401 automatisch ausloggen und zum Login zurück
       if (msg.contains('401') || msg.contains('UNAUTHENTICATED')) {
         await GoogleHealthAuth.logout();
         if (mounted) {
@@ -69,7 +69,8 @@ class _HomeScreenState extends State<HomeScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _loadExercises,
+            tooltip: 'Aktualisieren',
+            onPressed: () => _loadExercises(forceRefresh: true),
           ),
           IconButton(
             icon: const Icon(Icons.logout),
@@ -89,7 +90,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         Text('Fehler: $_error', textAlign: TextAlign.center),
                         const SizedBox(height: 16),
                         ElevatedButton(
-                          onPressed: _loadExercises,
+                          onPressed: () => _loadExercises(forceRefresh: true),
                           child: const Text('Nochmal versuchen'),
                         ),
                       ],
@@ -99,7 +100,7 @@ class _HomeScreenState extends State<HomeScreen> {
               : _exercises.isEmpty
                   ? const Center(child: Text('Keine Aktivitäten gefunden'))
                   : RefreshIndicator(
-                      onRefresh: _loadExercises,
+                      onRefresh: () => _loadExercises(forceRefresh: true),
                       child: ListView.builder(
                         itemCount: _exercises.length,
                         itemBuilder: (context, index) {
