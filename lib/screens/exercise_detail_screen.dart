@@ -290,6 +290,23 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
     );
   }
 
+  /// Light smoothing: clamp extreme jumps relative to local median.
+  List<FlSpot> _smooth(List<FlSpot> spots, {double maxJump = 0.35}) {
+    if (spots.length < 3) return spots;
+    final result = <FlSpot>[spots.first];
+    for (var i = 1; i < spots.length - 1; i++) {
+      final prev = result.last.y;
+      final next = spots[i + 1].y;
+      final cur = spots[i].y;
+      final localAvg = (prev + next) / 2;
+      final maxDev = localAvg.abs() * maxJump + 1.5;
+      final clamped = cur.clamp(localAvg - maxDev, localAvg + maxDev);
+      result.add(FlSpot(spots[i].x, clamped));
+    }
+    result.add(spots.last);
+    return result;
+  }
+
   Widget _buildRawChart() {
     if (_hrPoints.isEmpty && _distancePoints.isEmpty) {
       return const SizedBox.shrink();
@@ -301,18 +318,19 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
     final start = DateTime.tryParse(startStr);
     if (start == null) return const SizedBox.shrink();
 
-    // HR spots (minutes from start)
-    final hrSpots = <FlSpot>[];
+    // HR spots
+    final rawHr = <FlSpot>[];
     for (final p in _hrPoints) {
       final t = DateTime.tryParse(p['time'] ?? '');
       final bpm = (p['bpm'] as num?)?.toDouble();
-      if (t == null || bpm == null) continue;
+      if (t == null || bpm == null || bpm < 40 || bpm > 220) continue;
       final minutes = t.difference(start).inSeconds / 60.0;
-      if (minutes >= 0) hrSpots.add(FlSpot(minutes, bpm));
+      if (minutes >= 0) rawHr.add(FlSpot(minutes, bpm));
     }
+    final hrSpots = _smooth(rawHr, maxJump: 0.25);
 
-    // Pace/speed from distance points (1-min resolution)
-    final speedSpots = <FlSpot>[];
+    // Speed/pace spots
+    final rawSpeed = <FlSpot>[];
     for (final p in _distancePoints) {
       final dist = p['distance'] as Map<String, dynamic>? ?? {};
       final interval = dist['interval'] as Map<String, dynamic>? ?? {};
@@ -329,16 +347,46 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
       final kmh = paceMinKm > 0 ? 60.0 / paceMinKm : 0.0;
       final minutes = tStart.difference(start).inSeconds / 60.0;
       final value = (_showKmh ? kmh : paceMinKm).toDouble();
-      if (minutes >= 0 && value > 0 && value < 30) {
-        speedSpots.add(FlSpot(minutes, value));
+      if (minutes >= 0 && value > 0 && value < 25) {
+        rawSpeed.add(FlSpot(minutes, value));
       }
     }
+    final speedSpots = _smooth(rawSpeed, maxJump: 0.4);
 
     if (hrSpots.isEmpty && speedSpots.isEmpty) return const SizedBox.shrink();
 
     final allX = [...hrSpots, ...speedSpots].map((s) => s.x);
     final minX = allX.isEmpty ? 0.0 : allX.reduce((a, b) => a < b ? a : b);
     final maxX = allX.isEmpty ? 1.0 : allX.reduce((a, b) => a > b ? a : b);
+
+    // Independent scales
+    double sMin = 0, sMax = 1, hrMin = 60, hrMax = 180;
+    if (speedSpots.isNotEmpty) {
+      final ys = speedSpots.map((s) => s.y);
+      sMin = ys.reduce((a, b) => a < b ? a : b);
+      sMax = ys.reduce((a, b) => a > b ? a : b);
+      final pad = (sMax - sMin) * 0.12;
+      sMin -= pad;
+      sMax += pad;
+      if (sMin < 0) sMin = 0;
+    }
+    if (hrSpots.isNotEmpty) {
+      final ys = hrSpots.map((s) => s.y);
+      hrMin = ys.reduce((a, b) => a < b ? a : b);
+      hrMax = ys.reduce((a, b) => a > b ? a : b);
+      final pad = (hrMax - hrMin) * 0.08;
+      hrMin -= pad;
+      hrMax += pad;
+    }
+
+    // Map HR into the speed range so both lines share the chart but have their own labels
+    final sRange = (sMax - sMin).abs() < 0.1 ? 1.0 : (sMax - sMin);
+    final hrRange = (hrMax - hrMin).abs() < 1 ? 1.0 : (hrMax - hrMin);
+
+    final mappedHr = hrSpots.map((s) {
+      final t = (s.y - hrMin) / hrRange;
+      return FlSpot(s.x, sMin + t * sRange);
+    }).toList();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -365,6 +413,8 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
             LineChartData(
               minX: minX,
               maxX: maxX,
+              minY: sMin,
+              maxY: sMax,
               gridData: const FlGridData(show: true),
               titlesData: FlTitlesData(
                 bottomTitles: AxisTitles(
@@ -394,10 +444,11 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
                   sideTitles: SideTitles(
                     showTitles: hrSpots.isNotEmpty,
                     reservedSize: 40,
-                    getTitlesWidget: (value, meta) => Text(
-                      value.toStringAsFixed(0),
-                      style: const TextStyle(fontSize: 10, color: Colors.red),
-                    ),
+                    getTitlesWidget: (value, meta) {
+                      final t = (value - sMin) / sRange;
+                      final bpm = hrMin + t * hrRange;
+                      return Text(bpm.toStringAsFixed(0), style: const TextStyle(fontSize: 10, color: Colors.red));
+                    },
                   ),
                   axisNameWidget: hrSpots.isNotEmpty
                       ? const Text('bpm', style: TextStyle(color: Colors.red, fontSize: 12))
@@ -412,16 +463,16 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
                     spots: speedSpots,
                     isCurved: true,
                     color: Colors.blue,
-                    barWidth: 2,
+                    barWidth: 2.5,
                     dotData: const FlDotData(show: false),
                     belowBarData: BarAreaData(show: true, color: Colors.blue.withOpacity(0.08)),
                   ),
-                if (hrSpots.isNotEmpty)
+                if (mappedHr.isNotEmpty)
                   LineChartBarData(
-                    spots: hrSpots,
+                    spots: mappedHr,
                     isCurved: true,
                     color: Colors.red,
-                    barWidth: 2,
+                    barWidth: 2.5,
                     dotData: const FlDotData(show: false),
                     belowBarData: BarAreaData(show: false),
                   ),
