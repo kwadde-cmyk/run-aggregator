@@ -119,7 +119,7 @@ class GoogleHealthService {
   }
 
   /// Fetch heart-rate samples for a time range.
-  /// Uses physicalTime from the real API response.
+  /// Continues paging until we have passed the start of the exercise.
   static Future<List<Map<String, dynamic>>> getHeartRatePoints({
     required String startTime,
     required String endTime,
@@ -134,7 +134,7 @@ class GoogleHealthService {
     final results = <Map<String, dynamic>>[];
     String? pageToken;
     int pages = 0;
-    const maxPages = 12;
+    const maxPages = 25;
 
     do {
       final query = {
@@ -164,6 +164,8 @@ class GoogleHealthService {
           .map((p) => p as Map<String, dynamic>)
           .toList();
 
+      bool reachedBeforeStart = false;
+
       for (final p in points) {
         final hr = p['heartRate'] as Map<String, dynamic>? ?? {};
         final timeStr = hr['sampleTime']?['physicalTime']?.toString();
@@ -175,9 +177,12 @@ class GoogleHealthService {
 
         if (t == null || bpm == null || bpm <= 0) continue;
 
-        // Include if within ±2 min of the exercise window
-        if (t.isAfter(start.subtract(const Duration(minutes: 2))) &&
-            t.isBefore(end.add(const Duration(minutes: 2)))) {
+        if (t.isBefore(start.subtract(const Duration(minutes: 1)))) {
+          reachedBeforeStart = true;
+          continue;
+        }
+
+        if (t.isBefore(end.add(const Duration(minutes: 1)))) {
           results.add({'time': t.toIso8601String(), 'bpm': bpm});
         }
       }
@@ -185,12 +190,14 @@ class GoogleHealthService {
       pageToken = data['nextPageToken'] as String?;
       pages++;
 
-      if (results.length > 400) break;
+      // Stop once we have data and have gone past the start, or hit limits
+      if (reachedBeforeStart && results.isNotEmpty) break;
+      if (results.length > 600) break;
     } while (pageToken != null && pages < maxPages);
 
     results.sort((a, b) => (a['time'] as String).compareTo(b['time'] as String));
     // ignore: avoid_print
-    print('HF-Punkte nach Filter: ${results.length}');
+    print('HF-Punkte nach Filter: ${results.length} (pages: $pages)');
     return results;
   }
 
