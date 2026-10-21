@@ -140,6 +140,7 @@ class RunkeeperService {
   }
 
   /// Load HR samples from the most recent GPX files.
+  /// Runkeeper stores HR nested: extensions/gpxtpx:TrackPointExtension/gpxtpx:hr
   static Future<List<Map<String, dynamic>>> loadHeartRateSamples() async {
     final dir = await getApplicationDocumentsDirectory();
     final gpxDir = Directory('${dir.path}/runkeeper-gpx');
@@ -152,19 +153,27 @@ class RunkeeperService {
         final doc = XmlDocument.parse(xml);
         for (final pt in doc.findAllElements('trkpt')) {
           final timeEl = pt.findElements('time').firstOrNull;
-          final hrEl = pt.findAllElements('gpxtpx:hr').firstOrNull ??
-                       pt.findAllElements('hr').firstOrNull;
-          if (timeEl != null && hrEl != null) {
-            samples.add({
-              'time': DateTime.tryParse(timeEl.innerText),
-              'hr': int.tryParse(hrEl.innerText),
-            });
+          if (timeEl == null) continue;
+
+          // Find hr element by local name (handles namespaces)
+          XmlElement? hrEl;
+          for (final el in pt.descendants.whereType<XmlElement>()) {
+            if (el.name.local == 'hr') {
+              hrEl = el;
+              break;
+            }
+          }
+          if (hrEl == null) continue;
+
+          final t = DateTime.tryParse(timeEl.innerText);
+          final hr = int.tryParse(hrEl.innerText);
+          if (t != null && hr != null) {
+            samples.add({'time': t, 'hr': hr});
           }
         }
       }
     }
-    samples.sort((a, b) => (a['time'] as DateTime? ?? DateTime(0))
-        .compareTo(b['time'] as DateTime? ?? DateTime(0)));
+    samples.sort((a, b) => (a['time'] as DateTime).compareTo(b['time'] as DateTime));
     return samples;
   }
 }
