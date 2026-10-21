@@ -478,6 +478,13 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
                   ),
               ],
             ),
+            transformationConfig: const FlTransformationConfig(
+              scaleAxis: FlScaleAxis.horizontal,
+              minScale: 1.0,
+              maxScale: 8.0,
+              panEnabled: true,
+              scaleEnabled: true,
+            ),
           ),
         ),
       ],
