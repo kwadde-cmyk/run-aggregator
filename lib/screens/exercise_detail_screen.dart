@@ -326,9 +326,9 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
       if (sec <= 0) continue;
       final km = mm / 1000000.0;
       final paceMinKm = (sec / 60.0) / km;
-      final kmh = paceMinKm > 0 ? 60.0 / paceMinKm : 0;
+      final kmh = paceMinKm > 0 ? 60.0 / paceMinKm : 0.0;
       final minutes = tStart.difference(start).inSeconds / 60.0;
-      final value = _showKmh ? kmh : paceMinKm;
+      final value = (_showKmh ? kmh : paceMinKm).toDouble();
       if (minutes >= 0 && value > 0 && value < 30) {
         speedSpots.add(FlSpot(minutes, value));
       }
