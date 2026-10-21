@@ -118,7 +118,8 @@ class GoogleHealthService {
     return preferred;
   }
 
-  /// Fetch heart-rate samples for a time range (1s resolution).
+  /// Fetch heart-rate samples for a time range.
+  /// More tolerant parsing – tries common field paths.
   static Future<List<Map<String, dynamic>>> getHeartRatePoints({
     required String startTime,
     required String endTime,
@@ -133,11 +134,12 @@ class GoogleHealthService {
     final results = <Map<String, dynamic>>[];
     String? pageToken;
     int pages = 0;
-    const maxPages = 15;
+    const maxPages = 10;
+    bool loggedSample = false;
 
     do {
       final query = {
-        'pageSize': '1000',
+        'pageSize': '500',
         if (pageToken != null) 'pageToken': pageToken!,
       };
       final uri = Uri.parse(
@@ -152,34 +154,53 @@ class GoogleHealthService {
         },
       );
 
-      if (response.statusCode != 200) break;
+      if (response.statusCode != 200) {
+        // ignore: avoid_print
+        print('HR request failed: ${response.statusCode} ${response.body.substring(0, response.body.length.clamp(0, 180))}');
+        break;
+      }
 
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       final points = (data['dataPoints'] as List<dynamic>? ?? [])
           .map((p) => p as Map<String, dynamic>)
           .toList();
 
+      if (!loggedSample && points.isNotEmpty) {
+        // ignore: avoid_print
+        print('ERSTER HF-PUNKT: ${jsonEncode(points.first)}');
+        loggedSample = true;
+      }
+
       for (final p in points) {
-        final sampleTime = p['heartRate']?['sampleTime']?['time']?.toString();
-        final bpm = p['heartRate']?['beatsPerMinute'];
-        final t = DateTime.tryParse(sampleTime ?? '');
-        if (t == null || bpm == null) continue;
-        if (!t.isBefore(start) && t.isBefore(end)) {
-          results.add({'time': t.toIso8601String(), 'bpm': (bpm as num).toDouble()});
+        final hr = p['heartRate'] as Map<String, dynamic>? ?? {};
+        // Try several possible time paths
+        final timeStr = (hr['sampleTime']?['time'] ??
+                hr['sampleTime']?['startTime'] ??
+                hr['interval']?['startTime'] ??
+                p['startTime'])
+            ?.toString();
+        final bpmRaw = hr['beatsPerMinute'] ?? hr['bpm'] ?? hr['value'];
+        final t = DateTime.tryParse(timeStr ?? '');
+        final bpm = bpmRaw is num ? bpmRaw.toDouble() : double.tryParse(bpmRaw?.toString() ?? '');
+
+        if (t == null || bpm == null || bpm <= 0) continue;
+
+        // Loose window: include if within ±5 min of the exercise
+        if (t.isAfter(start.subtract(const Duration(minutes: 5))) &&
+            t.isBefore(end.add(const Duration(minutes: 5)))) {
+          results.add({'time': t.toIso8601String(), 'bpm': bpm});
         }
       }
 
       pageToken = data['nextPageToken'] as String?;
       pages++;
 
-      if (points.isNotEmpty) {
-        final oldestTime = points.last['heartRate']?['sampleTime']?['time']?.toString();
-        final oldest = DateTime.tryParse(oldestTime ?? '');
-        if (oldest != null && oldest.isBefore(start)) break;
-      }
+      if (points.isNotEmpty && results.length > 200) break; // enough samples
     } while (pageToken != null && pages < maxPages);
 
     results.sort((a, b) => (a['time'] as String).compareTo(b['time'] as String));
+    // ignore: avoid_print
+    print('HF-Punkte nach Filter: ${results.length}');
     return results;
   }
 
