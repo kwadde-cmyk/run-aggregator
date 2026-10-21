@@ -141,6 +141,7 @@ class GoogleHealthService {
   }
 
   /// Fetch heart-rate samples for a time range.
+  /// Pages further back and logs the oldest timestamp seen.
   static Future<List<Map<String, dynamic>>> getHeartRatePoints({
     required String startTime,
     required String endTime,
@@ -162,7 +163,9 @@ class GoogleHealthService {
     final results = <Map<String, dynamic>>[];
     String? pageToken;
     int pages = 0;
-    const maxPages = 25;
+    const maxPages = 60;
+    DateTime? oldestSeen;
+    DateTime? newestSeen;
 
     do {
       final query = {
@@ -205,12 +208,16 @@ class GoogleHealthService {
 
         if (t == null || bpm == null || bpm <= 0) continue;
 
-        if (t.isBefore(start.subtract(const Duration(minutes: 1)))) {
+        if (oldestSeen == null || t.isBefore(oldestSeen)) oldestSeen = t;
+        if (newestSeen == null || t.isAfter(newestSeen)) newestSeen = t;
+
+        if (t.isBefore(start.subtract(const Duration(minutes: 2)))) {
           reachedBeforeStart = true;
           continue;
         }
 
-        if (t.isBefore(end.add(const Duration(minutes: 1)))) {
+        if (!t.isBefore(start.subtract(const Duration(minutes: 2))) &&
+            t.isBefore(end.add(const Duration(minutes: 2)))) {
           results.add({'time': t.toIso8601String(), 'bpm': bpm});
         }
       }
@@ -219,12 +226,12 @@ class GoogleHealthService {
       pages++;
 
       if (reachedBeforeStart && results.isNotEmpty) break;
-      if (results.length > 600) break;
+      if (results.length > 800) break;
     } while (pageToken != null && pages < maxPages);
 
     results.sort((a, b) => (a['time'] as String).compareTo(b['time'] as String));
     // ignore: avoid_print
-    print('HF-Punkte nach Filter: ${results.length} (pages: $pages)');
+    print('HF-Punkte nach Filter: ${results.length} (pages: $pages) | oldest: $oldestSeen | newest: $newestSeen | target: $start → $end');
     DataCache.set(key, results);
     return results;
   }
