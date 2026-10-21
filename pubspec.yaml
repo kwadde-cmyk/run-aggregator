@@ -21,7 +21,7 @@ dependencies:
   flutter_map: ^7.0.2
   latlong2: ^0.9.1
   xml: ^6.5.0
-  flutter_inappwebview: ^6.1.5
+  flutter_inappwebview: 6.2.0-beta.3
   archive: ^3.6.1
 
 dev_dependencies:
