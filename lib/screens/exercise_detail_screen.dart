@@ -290,7 +290,6 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
     );
   }
 
-  /// Light smoothing: clamp extreme jumps relative to local median.
   List<FlSpot> _smooth(List<FlSpot> spots, {double maxJump = 0.35}) {
     if (spots.length < 3) return spots;
     final result = <FlSpot>[spots.first];
@@ -318,7 +317,6 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
     final start = DateTime.tryParse(startStr);
     if (start == null) return const SizedBox.shrink();
 
-    // HR spots
     final rawHr = <FlSpot>[];
     for (final p in _hrPoints) {
       final t = DateTime.tryParse(p['time'] ?? '');
@@ -329,7 +327,6 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
     }
     final hrSpots = _smooth(rawHr, maxJump: 0.25);
 
-    // Speed/pace spots
     final rawSpeed = <FlSpot>[];
     for (final p in _distancePoints) {
       final dist = p['distance'] as Map<String, dynamic>? ?? {};
@@ -359,7 +356,6 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
     final minX = allX.isEmpty ? 0.0 : allX.reduce((a, b) => a < b ? a : b);
     final maxX = allX.isEmpty ? 1.0 : allX.reduce((a, b) => a > b ? a : b);
 
-    // Independent scales
     double sMin = 0, sMax = 1, hrMin = 60, hrMax = 180;
     if (speedSpots.isNotEmpty) {
       final ys = speedSpots.map((s) => s.y);
@@ -379,7 +375,6 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
       hrMax += pad;
     }
 
-    // Map HR into the speed range so both lines share the chart but have their own labels
     final sRange = (sMax - sMin).abs() < 0.1 ? 1.0 : (sMax - sMin);
     final hrRange = (hrMax - hrMin).abs() < 1 ? 1.0 : (hrMax - hrMin);
 
@@ -478,13 +473,6 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
                   ),
               ],
             ),
-            transformationConfig: const FlTransformationConfig(
-              scaleAxis: FlScaleAxis.horizontal,
-              minScale: 1.0,
-              maxScale: 8.0,
-              panEnabled: true,
-              scaleEnabled: true,
-            ),
           ),
         ),
       ],
@@ -553,26 +541,19 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 8),
-          if (_debugInfo.isNotEmpty) Text(_debugInfo, style: const TextStyle(color: Colors.grey)),
-          if (_loadingSplits)
-            const Center(child: CircularProgressIndicator())
-          else if (_splitError != null)
-            Text('Fehler bei Splits: $_splitError')
-          else if (_splits.isEmpty)
-            const Text('Keine Distanzpunkte für Splits gefunden')
-          else
-            ..._splits.map((split) {
-              final pace = (split['paceMinKm'] as num?)?.toStringAsFixed(2) ?? '-';
-              final kmh = (split['kmh'] as num?)?.toStringAsFixed(1) ?? '-';
-              return Card(
-                child: ListTile(
-                  title: Text('Split ${split['index']} – ${split['distanceKm']} km'),
-                  subtitle: Text('${split['startTime']} → ${split['endTime']}'),
-                  trailing: Text(_showKmh ? '$kmh km/h' : '$pace min/km'),
-                ),
-              );
-            }),
+          if (_splitError != null)
+            Text('Split-Fehler: $_splitError', style: const TextStyle(color: Colors.orange)),
+          if (_debugInfo.isNotEmpty)
+            Text(_debugInfo, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+          ..._splits.map((s) {
+            final pace = (s['paceMinKm'] as num?)?.toStringAsFixed(2) ?? '-';
+            final kmh = (s['kmh'] as num?)?.toStringAsFixed(1) ?? '-';
+            final dur = (s['durationSec'] as num?)?.toStringAsFixed(0) ?? '-';
+            return ListTile(
+              title: Text('Split ${s['index']}'),
+              subtitle: Text('$pace min/km · $kmh km/h · $dur s'),
+            );
+          }),
         ],
       ),
     );
