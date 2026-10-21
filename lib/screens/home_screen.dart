@@ -22,6 +22,13 @@ class _HomeScreenState extends State<HomeScreen> {
     _loadExercises();
   }
 
+  bool _isRunning(Map<String, dynamic> item) {
+    final exercise = item['exercise'] as Map<String, dynamic>? ?? {};
+    final type = (exercise['exerciseType'] ?? '').toString().toUpperCase();
+    final name = (exercise['displayName'] ?? '').toString().toLowerCase();
+    return type == 'RUNNING' || name.contains('laufen') || name.contains('running');
+  }
+
   Future<void> _loadExercises({bool forceRefresh = false}) async {
     setState(() {
       _loading = true;
@@ -30,8 +37,9 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       if (forceRefresh) GoogleHealthService.clearCache();
       final data = await GoogleHealthService.getExercises(forceRefresh: forceRefresh);
+      final runs = data.where(_isRunning).toList();
       setState(() {
-        _exercises = data;
+        _exercises = runs;
         _loading = false;
       });
     } catch (e) {
@@ -98,7 +106,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 )
               : _exercises.isEmpty
-                  ? const Center(child: Text('Keine Aktivitäten gefunden'))
+                  ? const Center(child: Text('Keine Läufe gefunden'))
                   : RefreshIndicator(
                       onRefresh: () => _loadExercises(forceRefresh: true),
                       child: ListView.builder(
