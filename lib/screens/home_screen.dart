@@ -31,14 +31,25 @@ class _HomeScreenState extends State<HomeScreen> {
     _checkRunkeeper();
   }
 
-  Future<void> _checkRunkeeper() async {
-    if (!await RunkeeperService.isLoggedIn()) return;
+  Future<void> _checkRunkeeper({bool force = false}) async {
+    if (!await RunkeeperService.isLoggedIn()) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Bitte zuerst Runkeeper einloggen')),
+        );
+      }
+      return;
+    }
     setState(() => _runkeeperBusy = true);
     try {
-      final did = await RunkeeperService.importIfNeeded();
+      final did = await RunkeeperService.importIfNeeded(force: force);
       if (did && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Runkeeper-Daten aktualisiert')),
+        );
+      } else if (mounted && !force) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Runkeeper bereits heute aktualisiert')),
         );
       }
     } catch (e) {
@@ -104,7 +115,7 @@ class _HomeScreenState extends State<HomeScreen> {
       MaterialPageRoute(builder: (_) => const RunkeeperLoginScreen()),
     );
     if (ok == true) {
-      _checkRunkeeper();
+      _checkRunkeeper(force: true);
     }
   }
 
@@ -125,8 +136,8 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           IconButton(
             icon: const Icon(Icons.directions_run),
-            tooltip: 'Runkeeper aktualisieren',
-            onPressed: _runkeeperBusy ? null : _checkRunkeeper,
+            tooltip: 'Runkeeper erzwingen',
+            onPressed: _runkeeperBusy ? null : () => _checkRunkeeper(force: true),
           ),
           IconButton(
             icon: const Icon(Icons.refresh),
