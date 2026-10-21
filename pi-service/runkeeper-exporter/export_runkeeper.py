@@ -55,64 +55,41 @@ async def main(days: int = 10):
 
         print("Opening export page...")
         await page.goto("https://runkeeper.com/exportData", wait_until="networkidle")
-        await page.wait_for_timeout(3000)
+        await page.wait_for_timeout(2000)
 
         print("Current URL:", page.url)
-        content = await page.content()
-        print("--- Page snippet ---")
-        print(content[:3000])
-        print("--- End snippet ---")
 
-        # Try to find and click any export-related button
-        buttons = await page.query_selector_all("button, input[type='submit'], a")
-        print(f"Found {len(buttons)} clickable elements")
-        for i, btn in enumerate(buttons[:15]):
-            text = (await btn.inner_text() or "").strip()
-            if text:
-                print(f"  [{i}] {text[:60]}")
-
-        # Look for Start Export / Export Data
+        # Click Start Export / Export Data
         clicked = False
         for selector in [
             "button:has-text('Start Export')",
             "button:has-text('Export Data')",
-            "button:has-text('Export')",
             "a:has-text('Start Export')",
-            "input[value*='Export']",
+            "button:has-text('Export')",
         ]:
-            try:
-                el = await page.query_selector(selector)
-                if el:
-                    print(f"Clicking: {selector}")
+            el = await page.query_selector(selector)
+            if el:
+                print(f"Clicking: {selector}")
+                # Start listening for download before click
+                async with page.expect_download(timeout=180000) as download_info:
                     await el.click()
-                    clicked = True
-                    break
-            except Exception:
-                pass
+                download = await download_info.value
+                end = datetime.utcnow().date()
+                start = end - timedelta(days=days)
+                filename = DOWNLOAD_DIR / f"runkeeper-export-{start}-{end}.zip"
+                await download.save_as(filename)
+                print(f"Downloaded: {filename}")
+                clicked = True
+                break
 
         if not clicked:
-            print("No export button found. Check the snippet above.")
-            await browser.close()
-            return
-
-        print("Clicked export. Waiting for download link (up to 2 min)...")
-        try:
-            # Wait for a download link or button to appear
-            await page.wait_for_selector("a:has-text('Download'), button:has-text('Download'), a[href*='.zip']", timeout=120000)
-            print("Download element appeared")
-
-            async with page.expect_download(timeout=60000) as download_info:
-                await page.click("a:has-text('Download'), button:has-text('Download'), a[href*='.zip']")
-            download = await download_info.value
-            end = datetime.utcnow().date()
-            start = end - timedelta(days=days)
-            filename = DOWNLOAD_DIR / f"runkeeper-export-{start}-{end}.zip"
-            await download.save_as(filename)
-            print(f"Downloaded: {filename}")
-        except Exception as e:
-            print(f"Download wait failed: {e}")
-            print("Final page snippet:")
-            print((await page.content())[:2500])
+            print("No export button found.")
+            # Dump more info
+            buttons = await page.query_selector_all("button, a, input[type='submit']")
+            for i, btn in enumerate(buttons[:20]):
+                text = (await btn.inner_text() or "").strip()
+                if text:
+                    print(f"  [{i}] {text[:80]}")
 
         await browser.close()
 
