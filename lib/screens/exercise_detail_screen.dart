@@ -19,7 +19,7 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
   String? _splitError;
   String _debugInfo = '';
   double _splitDistanceKm = 1.0;
-  bool _showKmh = false; // false = min/km, true = km/h
+  bool _showKmh = false;
 
   List<LatLng> _routePoints = [];
   bool _loadingRoute = true;
@@ -27,6 +27,7 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
 
   List<Map<String, dynamic>> _hrPoints = [];
   bool _loadingHr = true;
+  String _hrDebug = '';
 
   @override
   void initState() {
@@ -37,14 +38,20 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
   }
 
   Future<void> _loadHeartRate() async {
-    setState(() => _loadingHr = true);
+    setState(() {
+      _loadingHr = true;
+      _hrDebug = '';
+    });
     try {
       final exercise = widget.exercisePoint['exercise'] as Map<String, dynamic>? ?? {};
       final interval = exercise['interval'] as Map<String, dynamic>? ?? {};
       final start = interval['startTime'] as String? ?? '';
       final end = interval['endTime'] as String? ?? '';
       if (start.isEmpty || end.isEmpty) {
-        setState(() => _loadingHr = false);
+        setState(() {
+          _loadingHr = false;
+          _hrDebug = 'Kein Zeitintervall für HF';
+        });
         return;
       }
       final points = await GoogleHealthService.getHeartRatePoints(
@@ -54,9 +61,13 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
       setState(() {
         _hrPoints = points;
         _loadingHr = false;
+        _hrDebug = 'HF-Punkte: ${points.length}';
       });
-    } catch (_) {
-      setState(() => _loadingHr = false);
+    } catch (e) {
+      setState(() {
+        _loadingHr = false;
+        _hrDebug = 'HF-Fehler: $e';
+      });
     }
   }
 
@@ -279,7 +290,6 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
   Widget _buildSplitChart() {
     if (_splits.isEmpty) return const SizedBox.shrink();
 
-    // Pace / Speed spots
     final speedSpots = <FlSpot>[];
     for (var i = 0; i < _splits.length; i++) {
       final value = _showKmh
@@ -288,13 +298,12 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
       speedSpots.add(FlSpot(i.toDouble() + 1, value));
     }
 
-    // HR average per split
-    final hrRaw = <double>[];
+    final hrAvgs = <double>[];
     for (var i = 0; i < _splits.length; i++) {
       final splitStart = DateTime.tryParse(_splits[i]['startTime'] ?? '');
       final splitEnd = DateTime.tryParse(_splits[i]['endTime'] ?? '');
-      if (splitStart == null || splitEnd == null) {
-        hrRaw.add(0);
+      if (splitStart == null || splitEnd == null || _hrPoints.isEmpty) {
+        hrAvgs.add(0);
         continue;
       }
       final inSplit = _hrPoints.where((p) {
@@ -302,41 +311,40 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
         return t != null && !t.isBefore(splitStart) && t.isBefore(splitEnd);
       }).toList();
       if (inSplit.isEmpty) {
-        hrRaw.add(0);
+        hrAvgs.add(0);
       } else {
         final avg = inSplit.map((p) => (p['bpm'] as num).toDouble()).reduce((a, b) => a + b) / inSplit.length;
-        hrRaw.add(avg);
+        hrAvgs.add(avg);
       }
     }
 
-    final validHr = hrRaw.where((v) => v > 0).toList();
-    final hrMin = validHr.isEmpty ? 0.0 : validHr.reduce((a, b) => a < b ? a : b);
-    final hrMax = validHr.isEmpty ? 1.0 : validHr.reduce((a, b) => a > b ? a : b);
+    final validHr = hrAvgs.where((v) => v > 0).toList();
+    final hasHr = validHr.isNotEmpty;
+    final hrMin = hasHr ? validHr.reduce((a, b) => a < b ? a : b) : 60.0;
+    final hrMax = hasHr ? validHr.reduce((a, b) => a > b ? a : b) : 180.0;
 
-    // Map HR to the speed axis range so both lines are visible
-    final speedValues = speedSpots.map((s) => s.y).toList();
-    final speedMin = speedValues.isEmpty ? 0.0 : speedValues.reduce((a, b) => a < b ? a : b);
-    final speedMax = speedValues.isEmpty ? 1.0 : speedValues.reduce((a, b) => a > b ? a : b);
-    final speedRange = (speedMax - speedMin).abs() < 0.1 ? 1.0 : (speedMax - speedMin);
+    // Always map HR into the visible speed range so the line appears
+    final speedVals = speedSpots.map((s) => s.y).toList();
+    final sMin = speedVals.reduce((a, b) => a < b ? a : b);
+    final sMax = speedVals.reduce((a, b) => a > b ? a : b);
+    final sRange = (sMax - sMin).abs() < 0.2 ? 1.0 : (sMax - sMin);
 
     final hrSpots = <FlSpot>[];
-    for (var i = 0; i < hrRaw.length; i++) {
-      if (hrRaw[i] <= 0) continue;
-      final norm = (hrRaw[i] - hrMin) / ((hrMax - hrMin).abs() < 1 ? 1 : (hrMax - hrMin));
-      final mapped = speedMin + norm * speedRange;
-      hrSpots.add(FlSpot(i.toDouble() + 1, mapped));
-    }
-
-    String speedLabel(double v) => _showKmh ? v.toStringAsFixed(1) : v.toStringAsFixed(1);
-    String hrLabel(double mapped) {
-      if (validHr.isEmpty) return '';
-      final norm = (mapped - speedMin) / speedRange;
-      final real = hrMin + norm * (hrMax - hrMin);
-      return real.toStringAsFixed(0);
+    for (var i = 0; i < hrAvgs.length; i++) {
+      if (hrAvgs[i] <= 0) continue;
+      final t = (hrAvgs[i] - hrMin) / ((hrMax - hrMin).abs() < 1 ? 1 : (hrMax - hrMin));
+      final y = sMin + t * sRange;
+      hrSpots.add(FlSpot(i.toDouble() + 1, y));
     }
 
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (_hrDebug.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Text(_hrDebug, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+          ),
         Row(
           mainAxisAlignment: MainAxisAlignment.end,
           children: [
@@ -349,17 +357,17 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
           ],
         ),
         SizedBox(
-          height: 260,
+          height: 270,
           child: LineChart(
             LineChartData(
-              minY: speedMin - speedRange * 0.05,
-              maxY: speedMax + speedRange * 0.05,
+              minY: sMin - sRange * 0.08,
+              maxY: sMax + sRange * 0.08,
               gridData: const FlGridData(show: true),
               titlesData: FlTitlesData(
                 bottomTitles: AxisTitles(
                   sideTitles: SideTitles(
                     showTitles: true,
-                    reservedSize: 30,
+                    reservedSize: 28,
                     getTitlesWidget: (value, meta) {
                       final idx = value.toInt();
                       if (idx < 1 || idx > _splits.length) return const SizedBox.shrink();
@@ -371,26 +379,26 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
                 leftTitles: AxisTitles(
                   sideTitles: SideTitles(
                     showTitles: true,
-                    reservedSize: 48,
+                    reservedSize: 46,
                     getTitlesWidget: (value, meta) => Text(
-                      speedLabel(value),
-                      style: const TextStyle(fontSize: 11, color: Colors.blue),
+                      value.toStringAsFixed(1),
+                      style: const TextStyle(fontSize: 10, color: Colors.blue),
                     ),
                   ),
-                  axisNameWidget: Text(_showKmh ? 'km/h' : 'min/km', style: const TextStyle(color: Colors.blue)),
+                  axisNameWidget: Text(_showKmh ? 'km/h' : 'min/km', style: const TextStyle(color: Colors.blue, fontSize: 12)),
                 ),
                 rightTitles: AxisTitles(
                   sideTitles: SideTitles(
-                    showTitles: hrSpots.isNotEmpty,
-                    reservedSize: 42,
-                    getTitlesWidget: (value, meta) => Text(
-                      hrLabel(value),
-                      style: const TextStyle(fontSize: 11, color: Colors.red),
-                    ),
+                    showTitles: hasHr,
+                    reservedSize: 40,
+                    getTitlesWidget: (value, meta) {
+                      if (!hasHr) return const SizedBox.shrink();
+                      final t = (value - sMin) / sRange;
+                      final bpm = hrMin + t * (hrMax - hrMin);
+                      return Text(bpm.toStringAsFixed(0), style: const TextStyle(fontSize: 10, color: Colors.red));
+                    },
                   ),
-                  axisNameWidget: hrSpots.isNotEmpty
-                      ? const Text('bpm', style: TextStyle(color: Colors.red))
-                      : null,
+                  axisNameWidget: hasHr ? const Text('bpm', style: TextStyle(color: Colors.red, fontSize: 12)) : null,
                 ),
                 topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
               ),
@@ -402,18 +410,15 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
                   color: Colors.blue,
                   barWidth: 3,
                   dotData: const FlDotData(show: true),
-                  belowBarData: BarAreaData(
-                    show: true,
-                    color: Colors.blue.withOpacity(0.12),
-                  ),
+                  belowBarData: BarAreaData(show: true, color: Colors.blue.withOpacity(0.1)),
                 ),
                 if (hrSpots.isNotEmpty)
                   LineChartBarData(
                     spots: hrSpots,
                     isCurved: true,
                     color: Colors.red,
-                    barWidth: 2.5,
-                    dotData: const FlDotData(show: false),
+                    barWidth: 3,
+                    dotData: const FlDotData(show: true),
                     belowBarData: BarAreaData(show: false),
                   ),
               ],
