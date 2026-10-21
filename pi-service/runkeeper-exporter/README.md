@@ -1,8 +1,8 @@
-# Runkeeper Exporter (Raspberry Pi)
+# Runkeeper Exporter (Raspberry Pi, headless)
 
 Downloads activity exports from runkeeper.com/exportData using a persistent browser session.
 
-## Setup on the Pi
+## Setup
 
 ```bash
 cd pi-service/runkeeper-exporter
@@ -12,13 +12,20 @@ pip install -r requirements.txt
 playwright install chromium
 ```
 
-## First login (once)
+## Login (Pi has no GUI)
 
+You need a valid browser profile once.
+
+**Option A – Login on a desktop, then copy the profile**
+1. On a machine with a display run the script once with a headed browser (or just log in manually and export cookies).
+2. Copy the folder `~/.runkeeper-profile` to the Pi (same path).
+
+**Option B – Use xvfb on the Pi**
 ```bash
-python3 export_runkeeper.py --login
+sudo apt install -y xvfb
+xvfb-run python3 export_runkeeper.py --login
 ```
-
-A browser window opens. Log in with your ASICS/Runkeeper account (email code). Press Enter in the terminal when done. The session is stored in `~/.runkeeper-profile`.
+(A virtual display is created; complete the login if a window appears, or use a VNC viewer.)
 
 ## Download export
 
@@ -26,11 +33,10 @@ A browser window opens. Log in with your ASICS/Runkeeper account (email code). P
 python3 export_runkeeper.py --days 10
 ```
 
-The ZIP with GPX files is saved to `~/runkeeper-exports/`.
+ZIP is saved to `~/runkeeper-exports/`.
 
 ## Notes
 
 - Selectors on the export page may need small adjustments if Runkeeper changes the UI.
-- On a Pi 4 the first Playwright install and Chromium download can take a while.
-- For headless use after the first login, omit `--login`.
-- The Flutter app can later read the GPX files from a shared folder or a simple local HTTP endpoint.
+- On a Pi 4 the first Chromium download can take a while.
+- After the first successful login the profile can be reused headlessly.
