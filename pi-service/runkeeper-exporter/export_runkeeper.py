@@ -2,8 +2,8 @@
 """
 Runkeeper Export Downloader for Raspberry Pi (headless).
 
-Uses Playwright/Chromium for all network requests so modern TLS works
-on older Raspberry Pi OS OpenSSL.
+Uses the classic export form (date range) and downloads the resulting
+S3 ZIP via Chromium's network stack (avoids old OpenSSL issues on Pi).
 
 Loads session from cookies.json.
 
@@ -46,6 +46,13 @@ async def main(days: int = 10):
     cookies = load_cookies()
     print(f"Loaded {len(cookies)} cookies")
 
+    end = datetime.utcnow().date()
+    start = end - timedelta(days=days)
+    # Runkeeper datepicker uses dd-M-yy (e.g. 11-Oct-26)
+    start_str = start.strftime("%d-%b-%y")
+    end_str = end.strftime("%d-%b-%y")
+    print(f"Requesting export {start_str} → {end_str}")
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -59,72 +66,54 @@ async def main(days: int = 10):
         print("Opening export page...")
         await page.goto("https://runkeeper.com/exportData", wait_until="networkidle")
         await page.wait_for_timeout(2000)
-        print("Current URL:", page.url)
 
-        # Click Start Export
-        start_btn = await page.query_selector(
-            "button:has-text('Start Export'), button:has-text('Export Data'), a:has-text('Start Export')"
-        )
-        if not start_btn:
-            print("Start Export button not found")
-            await browser.close()
-            return
+        # Fill classic export form and submit
+        await page.fill("#startDate", start_str)
+        await page.fill("#endDate", end_str)
+        print("Submitting classic export form...")
+        await page.click("#classicExportForm button[type='submit'], #dataExportButton")
 
-        print("Clicking Start Export...")
-        await start_btn.click()
-        print("Waiting for export to be prepared (up to 4 min)...")
-
-        # Poll for a real S3 / ZIP download link
+        # Wait for a new S3 ZIP link to appear (poll with reload)
+        print("Waiting for S3 download link...")
         download_href = None
-        for attempt in range(48):
+        for attempt in range(60):
             await page.wait_for_timeout(5000)
             try:
                 await page.reload(wait_until="domcontentloaded")
             except Exception:
                 pass
 
-            links = await page.query_selector_all("a[href]")
-            for link in links:
+            # Prefer the first "Download Now!" link (newest classic export)
+            link = await page.query_selector("a.btn-secondary:has-text('Download Now')")
+            if link:
                 href = await link.get_attribute("href") or ""
-                text = (await link.inner_text() or "").lower()
-                if (".zip" in href.lower() or "s3.amazonaws.com" in href.lower() or "download now" in text):
-                    if href and "exportData" not in href:
-                        download_href = href
-                        print(f"Found: {href}")
-                        break
-            if download_href:
-                print(f"Download link ready after ~{(attempt + 1) * 5}s")
-                break
+                if "s3.amazonaws.com" in href and ".zip" in href:
+                    download_href = href
+                    print(f"Found after ~{(attempt + 1) * 5}s: {href}")
+                    break
             print(f"  waiting... ({(attempt + 1) * 5}s)")
 
         if not download_href:
-            print("No download link found. Dumping links:")
-            for link in await page.query_selector_all("a[href]"):
+            print("No S3 ZIP link found. Dumping Download links:")
+            for link in await page.query_selector_all("a.btn-secondary"):
                 href = await link.get_attribute("href") or ""
-                text = (await link.inner_text() or "").strip()[:60]
-                if href:
-                    print(f"  {text} -> {href}")
+                text = (await link.inner_text() or "").strip()
+                print(f"  {text} -> {href}")
             await browser.close()
             return
 
-        if download_href.startswith("/"):
-            download_href = "https://runkeeper.com" + download_href
-        print(f"Downloading via Chromium: {download_href}")
-
-        # Use Chromium's network stack (modern TLS)
+        print("Downloading via Chromium...")
         response = await context.request.get(download_href, timeout=180000)
         body = await response.body()
-        print(f"Status: {response.status}, size: {len(body)} bytes, type: {response.headers.get('content-type')}")
+        print(f"Status: {response.status}, size: {len(body)} bytes")
 
-        if response.status == 200 and len(body) > 5000 and body[:2] == b"PK":
-            end = datetime.utcnow().date()
-            start = end - timedelta(days=days)
+        if response.status == 200 and len(body) > 1000 and body[:2] == b"PK":
             filename = DOWNLOAD_DIR / f"runkeeper-export-{start}-{end}.zip"
             filename.write_bytes(body)
             print(f"Saved: {filename}")
         else:
             print("Not a valid ZIP.")
-            print(body[:300])
+            print(body[:200])
 
         await browser.close()
 
