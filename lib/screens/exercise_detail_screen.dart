@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import '../services/google_health_service.dart';
+import '../services/runkeeper_service.dart';
 
 class ExerciseDetailScreen extends StatefulWidget {
   final Map<String, dynamic> exercisePoint;
@@ -28,6 +29,7 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
   List<Map<String, dynamic>> _hrPoints = [];
   bool _loadingHr = true;
   String _hrDebug = '';
+  String _hrSource = '';
 
   List<Map<String, dynamic>> _distancePoints = [];
 
@@ -43,27 +45,60 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
     setState(() {
       _loadingHr = true;
       _hrDebug = '';
+      _hrSource = '';
     });
     try {
       final exercise = widget.exercisePoint['exercise'] as Map<String, dynamic>? ?? {};
       final interval = exercise['interval'] as Map<String, dynamic>? ?? {};
-      final start = interval['startTime'] as String? ?? '';
-      final end = interval['endTime'] as String? ?? '';
-      if (start.isEmpty || end.isEmpty) {
+      final startStr = interval['startTime'] as String? ?? '';
+      final endStr = interval['endTime'] as String? ?? '';
+      if (startStr.isEmpty || endStr.isEmpty) {
         setState(() {
           _loadingHr = false;
           _hrDebug = 'Kein Zeitintervall für HF';
         });
         return;
       }
-      final points = await GoogleHealthService.getHeartRatePoints(
-        startTime: start,
-        endTime: end,
-      );
+
+      final start = DateTime.tryParse(startStr);
+      final end = DateTime.tryParse(endStr);
+
+      // Prefer chest-strap HR from Runkeeper GPX if available in this window
+      List<Map<String, dynamic>> points = [];
+      String source = 'Google';
+
+      if (start != null && end != null) {
+        final gpxSamples = await RunkeeperService.loadHeartRateSamples();
+        final filtered = gpxSamples.where((s) {
+          final t = s['time'] as DateTime?;
+          final hr = s['hr'] as int?;
+          if (t == null || hr == null) return false;
+          return !t.isBefore(start) && !t.isAfter(end) && hr >= 40 && hr <= 220;
+        }).map((s) => {
+          'time': (s['time'] as DateTime).toUtc().toIso8601String(),
+          'bpm': s['hr'],
+        }).toList();
+
+        if (filtered.length >= 10) {
+          points = filtered;
+          source = 'Runkeeper (Brustgurt)';
+        }
+      }
+
+      // Fallback to Google Health
+      if (points.isEmpty) {
+        points = await GoogleHealthService.getHeartRatePoints(
+          startTime: startStr,
+          endTime: endStr,
+        );
+        source = 'Google Health';
+      }
+
       setState(() {
         _hrPoints = points;
         _loadingHr = false;
-        _hrDebug = 'HF-Punkte: ${points.length}';
+        _hrSource = source;
+        _hrDebug = 'HF-Punkte: ${points.length} ($source)';
       });
     } catch (e) {
       setState(() {
@@ -509,6 +544,8 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
           const SizedBox(height: 8),
           Text('Distanz: $distanceKm km'),
           Text('Durchschn. HF: $avgHr bpm'),
+          if (_hrSource.isNotEmpty)
+            Text('HF-Quelle: $_hrSource', style: const TextStyle(fontSize: 12, color: Colors.grey)),
           Text('Kalorien: $calories'),
           Text('Durchschn. Pace: $paceMinKm min/km'),
           const SizedBox(height: 16),
