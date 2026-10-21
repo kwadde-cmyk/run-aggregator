@@ -126,12 +126,16 @@ class RunkeeperService {
     if (await gpxDir.exists()) await gpxDir.delete(recursive: true);
     await gpxDir.create();
 
+    int gpxCount = 0;
     for (final file in archive) {
       if (file.isFile && file.name.toLowerCase().endsWith('.gpx')) {
         final out = File('${gpxDir.path}/${file.name.split('/').last}');
         await out.writeAsBytes(file.content as List<int>);
+        gpxCount++;
       }
     }
+    // ignore: avoid_print
+    print('Runkeeper: extracted $gpxCount GPX files to ${gpxDir.path}');
   }
 
   static String _formatDate(DateTime dt) {
@@ -144,13 +148,20 @@ class RunkeeperService {
   static Future<List<Map<String, dynamic>>> loadHeartRateSamples() async {
     final dir = await getApplicationDocumentsDirectory();
     final gpxDir = Directory('${dir.path}/runkeeper-gpx');
-    if (!await gpxDir.exists()) return [];
+    if (!await gpxDir.exists()) {
+      // ignore: avoid_print
+      print('Runkeeper: gpx dir does not exist');
+      return [];
+    }
 
     final samples = <Map<String, dynamic>>[];
+    int fileCount = 0;
     await for (final entity in gpxDir.list()) {
       if (entity is File && entity.path.toLowerCase().endsWith('.gpx')) {
+        fileCount++;
         final xml = await entity.readAsString();
         final doc = XmlDocument.parse(xml);
+        int hrInFile = 0;
         for (final pt in doc.findAllElements('trkpt')) {
           final timeEl = pt.findElements('time').firstOrNull;
           if (timeEl == null) continue;
@@ -169,11 +180,16 @@ class RunkeeperService {
           final hr = int.tryParse(hrEl.innerText);
           if (t != null && hr != null) {
             samples.add({'time': t, 'hr': hr});
+            hrInFile++;
           }
         }
+        // ignore: avoid_print
+        print('Runkeeper: ${entity.path.split('/').last} → $hrInFile HR points');
       }
     }
     samples.sort((a, b) => (a['time'] as DateTime).compareTo(b['time'] as DateTime));
+    // ignore: avoid_print
+    print('Runkeeper: total $fileCount GPX files, ${samples.length} HR samples');
     return samples;
   }
 }
