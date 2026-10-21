@@ -68,29 +68,42 @@ async def main(days: int = 10):
 
         print("Clicking Start Export...")
         await start_btn.click()
-        print("Waiting for export to be prepared (up to 3 min)...")
+        print("Waiting for export to be prepared (up to 4 min)...")
 
-        # Poll for a download link
+        # Poll for a real download link (href containing .zip or download)
         download_href = None
-        for attempt in range(36):
+        for attempt in range(48):
             await page.wait_for_timeout(5000)
             try:
                 await page.reload(wait_until="domcontentloaded")
             except Exception:
                 pass
 
-            link = await page.query_selector(
-                "a:has-text('Download'), a:has-text('Download Now'), a[href*='.zip'], a[href*='export']"
-            )
-            if link:
-                download_href = await link.get_attribute("href")
-                print(f"Download link found after ~{(attempt+1)*5}s: {download_href}")
+            # Look for links that look like actual file downloads
+            links = await page.query_selector_all("a[href]")
+            for link in links:
+                href = await link.get_attribute("href") or ""
+                text = (await link.inner_text() or "").lower()
+                if any(x in href.lower() for x in [".zip", "download", "export"]) or "download" in text:
+                    if href and href != "/exportData" and "exportData" not in href:
+                        download_href = href
+                        print(f"Candidate link: {href} (text: {text[:40]})")
+                        break
+            if download_href:
+                print(f"Download link found after ~{(attempt+1)*5}s")
                 break
             print(f"  still waiting... ({(attempt+1)*5}s)")
 
         if not download_href:
-            print("No download link appeared. Final page snippet:")
-            print((await page.content())[:3000])
+            print("No suitable download link found. Dumping all links:")
+            links = await page.query_selector_all("a[href]")
+            for link in links[:30]:
+                href = await link.get_attribute("href") or ""
+                text = (await link.inner_text() or "").strip()[:50]
+                if href:
+                    print(f"  {text} -> {href}")
+            print("--- Page snippet ---")
+            print((await page.content())[:4000])
             await browser.close()
             return
 
@@ -106,18 +119,17 @@ async def main(days: int = 10):
             session.cookies.set(c["name"], c["value"], domain=c.get("domain") or "")
 
         r = session.get(download_href, allow_redirects=True, timeout=120)
-        print(f"Download status: {r.status_code}, size: {len(r.content)} bytes")
+        print(f"Download status: {r.status_code}, size: {len(r.content)} bytes, content-type: {r.headers.get('content-type')}")
 
-        if r.status_code == 200 and len(r.content) > 1000:
+        if r.status_code == 200 and len(r.content) > 5000 and (r.content[:2] == b'PK' or 'zip' in r.headers.get('content-type', '').lower()):
             end = datetime.utcnow().date()
             start = end - timedelta(days=days)
             filename = DOWNLOAD_DIR / f"runkeeper-export-{start}-{end}.zip"
             filename.write_bytes(r.content)
             print(f"Saved: {filename}")
         else:
-            print("Download failed or file too small. Response headers:")
-            print(dict(r.headers))
-            print("Body snippet:", r.text[:500] if r.text else "(binary)")
+            print("Not a valid ZIP. Response snippet:")
+            print(r.text[:800] if r.text else r.content[:200])
 
         await browser.close()
 
