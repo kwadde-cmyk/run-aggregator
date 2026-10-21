@@ -47,7 +47,7 @@ class GoogleHealthService {
     return points;
   }
 
-  /// Fetch distance points for a time range, preferring a single source to avoid double-counting.
+  /// Fetch distance points for a time range using server-side filter.
   static Future<List<Map<String, dynamic>>> getDistancePoints({
     required String startTime,
     required String endTime,
@@ -66,14 +66,17 @@ class GoogleHealthService {
     final end = DateTime.tryParse(endTime);
     if (start == null || end == null) return [];
 
+    final filter = 'distance.interval.start_time >= "${start.toUtc().toIso8601String()}" AND distance.interval.start_time < "${end.toUtc().toIso8601String()}"';
+
     final candidates = <Map<String, dynamic>>[];
     String? pageToken;
     int pages = 0;
-    const maxPages = 8;
+    const maxPages = 5;
 
     do {
       final query = {
         'pageSize': '500',
+        'filter': filter,
         if (pageToken != null) 'pageToken': pageToken!,
       };
       final uri = Uri.parse(
@@ -88,34 +91,21 @@ class GoogleHealthService {
         },
       );
 
-      if (response.statusCode != 200) break;
+      if (response.statusCode != 200) {
+        // ignore: avoid_print
+        print('Distance filter failed: ${response.statusCode} ${response.body.substring(0, response.body.length.clamp(0, 200))}');
+        break;
+      }
 
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       final points = (data['dataPoints'] as List<dynamic>? ?? [])
           .map((p) => p as Map<String, dynamic>)
           .toList();
 
-      for (final p in points) {
-        final interval = p['distance']?['interval'] as Map<String, dynamic>? ?? {};
-        final pStart = DateTime.tryParse(interval['startTime']?.toString() ?? '');
-        final pEnd = DateTime.tryParse(interval['endTime']?.toString() ?? '') ?? pStart;
-        if (pStart == null || pEnd == null) continue;
-
-        if (pEnd.isAfter(start) && pStart.isBefore(end)) {
-          candidates.add(p);
-        }
-      }
+      candidates.addAll(points);
 
       pageToken = data['nextPageToken'] as String?;
       pages++;
-
-      if (points.isNotEmpty) {
-        final oldest = points.last;
-        final oldestStart = DateTime.tryParse(
-          (oldest['distance']?['interval']?['startTime'] ?? '').toString(),
-        );
-        if (oldestStart != null && oldestStart.isBefore(start)) break;
-      }
     } while (pageToken != null && pages < maxPages);
 
     if (candidates.isEmpty) {
@@ -140,8 +130,7 @@ class GoogleHealthService {
     return preferred;
   }
 
-  /// Fetch heart-rate samples for a time range.
-  /// Pages further back and logs the oldest timestamp seen.
+  /// Fetch heart-rate samples for a time range using server-side filter.
   static Future<List<Map<String, dynamic>>> getHeartRatePoints({
     required String startTime,
     required String endTime,
@@ -160,16 +149,17 @@ class GoogleHealthService {
     final end = DateTime.tryParse(endTime);
     if (start == null || end == null) return [];
 
+    final filter = 'heart_rate.sample_time.physical_time >= "${start.toUtc().toIso8601String()}" AND heart_rate.sample_time.physical_time < "${end.toUtc().toIso8601String()}"';
+
     final results = <Map<String, dynamic>>[];
     String? pageToken;
     int pages = 0;
-    const maxPages = 60;
-    DateTime? oldestSeen;
-    DateTime? newestSeen;
+    const maxPages = 10;
 
     do {
       final query = {
         'pageSize': '1000',
+        'filter': filter,
         if (pageToken != null) 'pageToken': pageToken!,
       };
       final uri = Uri.parse(
@@ -186,7 +176,7 @@ class GoogleHealthService {
 
       if (response.statusCode != 200) {
         // ignore: avoid_print
-        print('HR request failed: ${response.statusCode}');
+        print('HR filter failed: ${response.statusCode} ${response.body.substring(0, response.body.length.clamp(0, 200))}');
         break;
       }
 
@@ -194,8 +184,6 @@ class GoogleHealthService {
       final points = (data['dataPoints'] as List<dynamic>? ?? [])
           .map((p) => p as Map<String, dynamic>)
           .toList();
-
-      bool reachedBeforeStart = false;
 
       for (final p in points) {
         final hr = p['heartRate'] as Map<String, dynamic>? ?? {};
@@ -207,31 +195,17 @@ class GoogleHealthService {
             : double.tryParse(bpmRaw?.toString() ?? '');
 
         if (t == null || bpm == null || bpm <= 0) continue;
-
-        if (oldestSeen == null || t.isBefore(oldestSeen)) oldestSeen = t;
-        if (newestSeen == null || t.isAfter(newestSeen)) newestSeen = t;
-
-        if (t.isBefore(start.subtract(const Duration(minutes: 2)))) {
-          reachedBeforeStart = true;
-          continue;
-        }
-
-        if (!t.isBefore(start.subtract(const Duration(minutes: 2))) &&
-            t.isBefore(end.add(const Duration(minutes: 2)))) {
-          results.add({'time': t.toIso8601String(), 'bpm': bpm});
-        }
+        results.add({'time': t.toIso8601String(), 'bpm': bpm});
       }
 
       pageToken = data['nextPageToken'] as String?;
       pages++;
-
-      if (reachedBeforeStart && results.isNotEmpty) break;
       if (results.length > 800) break;
     } while (pageToken != null && pages < maxPages);
 
     results.sort((a, b) => (a['time'] as String).compareTo(b['time'] as String));
     // ignore: avoid_print
-    print('HF-Punkte nach Filter: ${results.length} (pages: $pages) | oldest: $oldestSeen | newest: $newestSeen | target: $start → $end');
+    print('HF-Punkte (filter): ${results.length} (pages: $pages) | target: $start → $end');
     DataCache.set(key, results);
     return results;
   }
