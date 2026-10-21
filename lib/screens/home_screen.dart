@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import '../services/google_health_auth.dart';
 import '../services/google_health_service.dart';
+import '../services/runkeeper_service.dart';
 import 'login_screen.dart';
 import 'exercise_detail_screen.dart';
+import 'runkeeper_login_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -15,11 +17,39 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Map<String, dynamic>> _exercises = [];
   bool _loading = true;
   String? _error;
+  bool _runkeeperBusy = false;
 
   @override
   void initState() {
     super.initState();
-    _loadExercises();
+    _init();
+  }
+
+  Future<void> _init() async {
+    await _loadExercises();
+    // Auto-import Runkeeper if last import is not from today
+    _checkRunkeeper();
+  }
+
+  Future<void> _checkRunkeeper() async {
+    if (!await RunkeeperService.isLoggedIn()) return;
+    setState(() => _runkeeperBusy = true);
+    try {
+      final did = await RunkeeperService.importIfNeeded();
+      if (did && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Runkeeper-Daten aktualisiert')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Runkeeper-Fehler: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _runkeeperBusy = false);
+    }
   }
 
   bool _isRunning(Map<String, dynamic> item) {
@@ -69,15 +99,38 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _openRunkeeperLogin() async {
+    final ok = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => const RunkeeperLoginScreen()),
+    );
+    if (ok == true) {
+      _checkRunkeeper();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Run Aggregator'),
         actions: [
+          if (_runkeeperBusy)
+            const Padding(
+              padding: EdgeInsets.all(12),
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          IconButton(
+            icon: const Icon(Icons.directions_run),
+            tooltip: 'Runkeeper aktualisieren',
+            onPressed: _runkeeperBusy ? null : _checkRunkeeper,
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
-            tooltip: 'Aktualisieren',
+            tooltip: 'Google aktualisieren',
             onPressed: () => _loadExercises(forceRefresh: true),
           ),
           IconButton(
@@ -85,6 +138,11 @@ class _HomeScreenState extends State<HomeScreen> {
             onPressed: _logout,
           ),
         ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _openRunkeeperLogin,
+        icon: const Icon(Icons.login),
+        label: const Text('Runkeeper'),
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
