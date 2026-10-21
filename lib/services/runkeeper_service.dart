@@ -1,52 +1,170 @@
-import 'package:http/http.dart' as http;
 import 'dart:convert';
-import '../config/runkeeper_config.dart';
+import 'dart:io';
+import 'package:archive/archive.dart';
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
+import 'package:xml/xml.dart';
 
-/// Stub for ASICS Runkeeper integration.
-/// Activities from here will later be merged with Google Health runs.
 class RunkeeperService {
-  static Future<List<Map<String, dynamic>>> getActivities({
-    required String accessToken,
-    int page = 0,
-  }) async {
-    final uri = Uri.parse('${RunkeeperConfig.apiBaseUrl}/fitnessActivities?page=$page');
+  static const _storage = FlutterSecureStorage();
+  static const _cookiesKey = 'runkeeper_cookies';
+  static const _lastImportKey = 'runkeeper_last_import';
 
-    final response = await http.get(
-      uri,
-      headers: {
-        'Authorization': 'Bearer $accessToken',
-        'Accept': 'application/vnd.com.runkeeper.FitnessActivityFeed+json',
-      },
-    );
-
-    if (response.statusCode != 200) {
-      throw Exception('Runkeeper activities failed: ${response.statusCode} ${response.body}');
-    }
-
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
-    final items = data['items'] as List<dynamic>? ?? [];
-    return items.map((e) => e as Map<String, dynamic>).toList();
+  static Future<bool> isLoggedIn() async {
+    final cookies = await _storage.read(key: _cookiesKey);
+    return cookies != null && cookies.isNotEmpty;
   }
 
-  /// Fetch detailed activity (includes distance, heart rate, path if available).
-  static Future<Map<String, dynamic>> getActivityDetail({
-    required String accessToken,
-    required String activityUri,
-  }) async {
-    final uri = Uri.parse('${RunkeeperConfig.apiBaseUrl}$activityUri');
+  static Future<void> saveCookies(List<Cookie> cookies) async {
+    final list = cookies.map((c) => {
+      'name': c.name,
+      'value': c.value,
+      'domain': c.domain,
+      'path': c.path,
+    }).toList();
+    await _storage.write(key: _cookiesKey, value: jsonEncode(list));
+  }
 
-    final response = await http.get(
-      uri,
+  static Future<String?> _cookieHeader() async {
+    final raw = await _storage.read(key: _cookiesKey);
+    if (raw == null) return null;
+    final list = jsonDecode(raw) as List;
+    return list.map((c) => '${c['name']}=${c['value']}').join('; ');
+  }
+
+  static Future<DateTime?> lastImportDate() async {
+    final s = await _storage.read(key: _lastImportKey);
+    if (s == null) return null;
+    return DateTime.tryParse(s);
+  }
+
+  static Future<void> _setLastImport(DateTime dt) async {
+    await _storage.write(key: _lastImportKey, value: dt.toIso8601String());
+  }
+
+  /// Returns true if an import was performed.
+  static Future<bool> importIfNeeded({bool force = false}) async {
+    if (!await isLoggedIn()) return false;
+
+    final last = await lastImportDate();
+    final today = DateTime.now();
+    final isToday = last != null &&
+        last.year == today.year &&
+        last.month == today.month &&
+        last.day == today.day;
+
+    if (isToday && !force) return false;
+
+    await _doExportAndDownload();
+    await _setLastImport(DateTime.now());
+    return true;
+  }
+
+  static Future<void> _doExportAndDownload() async {
+    final cookieHeader = await _cookieHeader();
+    if (cookieHeader == null) throw Exception('No Runkeeper cookies');
+
+    final end = DateTime.now();
+    final start = end.subtract(const Duration(days: 10));
+    final startStr = _formatDate(start);
+    final endStr = _formatDate(end);
+
+    // Submit classic export
+    final exportRes = await http.post(
+      Uri.parse('https://runkeeper.com/exportData'),
       headers: {
-        'Authorization': 'Bearer $accessToken',
-        'Accept': 'application/vnd.com.runkeeper.FitnessActivity+json',
+        'Cookie': cookieHeader,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'Mozilla/5.0',
+      },
+      body: {
+        '_eventName': 'handleExport',
+        'exportType': 'CLASSIC',
+        'startDate': startStr,
+        'endDate': endStr,
       },
     );
 
-    if (response.statusCode != 200) {
-      throw Exception('Runkeeper detail failed: ${response.statusCode}');
+    if (exportRes.statusCode != 200 && exportRes.statusCode != 302) {
+      throw Exception('Export submit failed: ${exportRes.statusCode}');
     }
 
-    return jsonDecode(response.body) as Map<String, dynamic>;
+    // Poll for the newest Download Now link
+    String? zipUrl;
+    for (var i = 0; i < 24; i++) {
+      await Future.delayed(const Duration(seconds: 5));
+      final page = await http.get(
+        Uri.parse('https://runkeeper.com/exportData'),
+        headers: {'Cookie': cookieHeader, 'User-Agent': 'Mozilla/5.0'},
+      );
+      final match = RegExp(
+        r'href="(https://s3\.amazonaws\.com/hrmfile\.runkeeper\.com/export/[^"]+\.zip)"',
+      ).firstMatch(page.body);
+      if (match != null) {
+        zipUrl = match.group(1);
+        break;
+      }
+    }
+
+    if (zipUrl == null) throw Exception('No download link appeared');
+
+    // Download ZIP (Android TLS handles S3 fine)
+    final zipRes = await http.get(Uri.parse(zipUrl));
+    if (zipRes.statusCode != 200) {
+      throw Exception('ZIP download failed: ${zipRes.statusCode}');
+    }
+
+    final dir = await getApplicationDocumentsDirectory();
+    final zipFile = File('${dir.path}/runkeeper-latest.zip');
+    await zipFile.writeAsBytes(zipRes.bodyBytes);
+
+    // Extract GPX files
+    final archive = ZipDecoder().decodeBytes(zipRes.bodyBytes);
+    final gpxDir = Directory('${dir.path}/runkeeper-gpx');
+    if (await gpxDir.exists()) await gpxDir.delete(recursive: true);
+    await gpxDir.create();
+
+    for (final file in archive) {
+      if (file.isFile && file.name.toLowerCase().endsWith('.gpx')) {
+        final out = File('${gpxDir.path}/${file.name.split('/').last}');
+        await out.writeAsBytes(file.content as List<int>);
+      }
+    }
+  }
+
+  static String _formatDate(DateTime dt) {
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return '${dt.day.toString().padLeft(2,'0')}-${months[dt.month-1]}-${(dt.year%100).toString().padLeft(2,'0')}';
+  }
+
+  /// Load HR samples from the most recent GPX files.
+  static Future<List<Map<String, dynamic>>> loadHeartRateSamples() async {
+    final dir = await getApplicationDocumentsDirectory();
+    final gpxDir = Directory('${dir.path}/runkeeper-gpx');
+    if (!await gpxDir.exists()) return [];
+
+    final samples = <Map<String, dynamic>>[];
+    await for (final entity in gpxDir.list()) {
+      if (entity is File && entity.path.toLowerCase().endsWith('.gpx')) {
+        final xml = await entity.readAsString();
+        final doc = XmlDocument.parse(xml);
+        for (final pt in doc.findAllElements('trkpt')) {
+          final timeEl = pt.findElements('time').firstOrNull;
+          final hrEl = pt.findAllElements('gpxtpx:hr').firstOrNull ??
+                       pt.findAllElements('hr').firstOrNull;
+          if (timeEl != null && hrEl != null) {
+            samples.add({
+              'time': DateTime.tryParse(timeEl.innerText),
+              'hr': int.tryParse(hrEl.innerText),
+            });
+          }
+        }
+      }
+    }
+    samples.sort((a, b) => (a['time'] as DateTime? ?? DateTime(0))
+        .compareTo(b['time'] as DateTime? ?? DateTime(0)));
+    return samples;
   }
 }
