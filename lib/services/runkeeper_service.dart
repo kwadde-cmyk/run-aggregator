@@ -110,18 +110,39 @@ class RunkeeperService {
 
     if (zipUrl == null) throw Exception('No download link appeared');
 
-    // Download ZIP (Android TLS handles S3 fine)
+    // Download ZIP
+    // ignore: avoid_print
+    print('Runkeeper: downloading $zipUrl');
     final zipRes = await http.get(Uri.parse(zipUrl));
     if (zipRes.statusCode != 200) {
       throw Exception('ZIP download failed: ${zipRes.statusCode}');
     }
 
+    final bytes = zipRes.bodyBytes;
+    // ignore: avoid_print
+    print('Runkeeper: ZIP size ${bytes.length} bytes, magic: ${bytes.take(4).map((b) => b.toRadixString(16)).join(" ")}');
+
     final dir = await getApplicationDocumentsDirectory();
     final zipFile = File('${dir.path}/runkeeper-latest.zip');
-    await zipFile.writeAsBytes(zipRes.bodyBytes);
+    await zipFile.writeAsBytes(bytes);
 
-    // Extract GPX files
-    final archive = ZipDecoder().decodeBytes(zipRes.bodyBytes);
+    // Extract
+    Archive archive;
+    try {
+      archive = ZipDecoder().decodeBytes(bytes);
+    } catch (e) {
+      // ignore: avoid_print
+      print('Runkeeper: ZIP decode failed: $e');
+      return;
+    }
+
+    // ignore: avoid_print
+    print('Runkeeper: ZIP contains ${archive.length} entries:');
+    for (final f in archive.take(30)) {
+      // ignore: avoid_print
+      print('  ${f.isFile ? "FILE" : "DIR "} ${f.name} (${f.size} bytes)');
+    }
+
     final gpxDir = Directory('${dir.path}/runkeeper-gpx');
     if (await gpxDir.exists()) await gpxDir.delete(recursive: true);
     await gpxDir.create();
@@ -144,7 +165,6 @@ class RunkeeperService {
   }
 
   /// Load HR samples from the most recent GPX files.
-  /// Runkeeper stores HR nested: extensions/gpxtpx:TrackPointExtension/gpxtpx:hr
   static Future<List<Map<String, dynamic>>> loadHeartRateSamples() async {
     final dir = await getApplicationDocumentsDirectory();
     final gpxDir = Directory('${dir.path}/runkeeper-gpx');
@@ -166,7 +186,6 @@ class RunkeeperService {
           final timeEl = pt.findElements('time').firstOrNull;
           if (timeEl == null) continue;
 
-          // Find hr element by local name (handles namespaces)
           XmlElement? hrEl;
           for (final el in pt.descendants.whereType<XmlElement>()) {
             if (el.name.local == 'hr') {
