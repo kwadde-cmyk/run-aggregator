@@ -26,7 +26,6 @@ def load_cookies():
         raise FileNotFoundError(f"{COOKIES_FILE} not found. Export cookies from your browser.")
     with open(COOKIES_FILE) as f:
         raw = json.load(f)
-    # Normalize different cookie export formats
     cookies = []
     for c in raw:
         cookie = {
@@ -54,45 +53,66 @@ async def main(days: int = 10):
 
         page = await context.new_page()
 
-        # Check if logged in
-        await page.goto("https://runkeeper.com/settings", wait_until="domcontentloaded")
-        await page.wait_for_timeout(2000)
-        if "login" in page.url.lower():
-            print("Not logged in. Cookies may be invalid or expired.")
+        print("Opening export page...")
+        await page.goto("https://runkeeper.com/exportData", wait_until="networkidle")
+        await page.wait_for_timeout(3000)
+
+        print("Current URL:", page.url)
+        content = await page.content()
+        print("--- Page snippet ---")
+        print(content[:3000])
+        print("--- End snippet ---")
+
+        # Try to find and click any export-related button
+        buttons = await page.query_selector_all("button, input[type='submit'], a")
+        print(f"Found {len(buttons)} clickable elements")
+        for i, btn in enumerate(buttons[:15]):
+            text = (await btn.inner_text() or "").strip()
+            if text:
+                print(f"  [{i}] {text[:60]}")
+
+        # Look for Start Export / Export Data
+        clicked = False
+        for selector in [
+            "button:has-text('Start Export')",
+            "button:has-text('Export Data')",
+            "button:has-text('Export')",
+            "a:has-text('Start Export')",
+            "input[value*='Export']",
+        ]:
+            try:
+                el = await page.query_selector(selector)
+                if el:
+                    print(f"Clicking: {selector}")
+                    await el.click()
+                    clicked = True
+                    break
+            except Exception:
+                pass
+
+        if not clicked:
+            print("No export button found. Check the snippet above.")
             await browser.close()
             return
 
-        print("Logged in. Going to export page...")
-        await page.goto("https://runkeeper.com/exportData", wait_until="domcontentloaded")
-        await page.wait_for_timeout(2000)
-
-        # Set date range (last N days)
-        end = datetime.utcnow().date()
-        start = end - timedelta(days=days)
-
+        print("Clicked export. Waiting for download link (up to 2 min)...")
         try:
-            await page.fill("input[name='startDate'], input[placeholder*='Start'], input[id*='start']", start.strftime("%Y-%m-%d"))
-            await page.fill("input[name='endDate'], input[placeholder*='End'], input[id*='end']", end.strftime("%Y-%m-%d"))
-        except Exception as e:
-            print(f"Could not fill date fields: {e}")
-            print("Page content snippet:")
-            print((await page.content())[:2000])
-            await browser.close()
-            return
+            # Wait for a download link or button to appear
+            await page.wait_for_selector("a:has-text('Download'), button:has-text('Download'), a[href*='.zip']", timeout=120000)
+            print("Download element appeared")
 
-        # Trigger export and download
-        try:
-            async with page.expect_download(timeout=120000) as download_info:
-                await page.click("button:has-text('Export Data'), button:has-text('Export'), input[type='submit']")
+            async with page.expect_download(timeout=60000) as download_info:
+                await page.click("a:has-text('Download'), button:has-text('Download'), a[href*='.zip']")
             download = await download_info.value
+            end = datetime.utcnow().date()
+            start = end - timedelta(days=days)
             filename = DOWNLOAD_DIR / f"runkeeper-export-{start}-{end}.zip"
             await download.save_as(filename)
             print(f"Downloaded: {filename}")
         except Exception as e:
-            print(f"Export/download failed: {e}")
-            print("Current URL:", page.url)
-            print("Page snippet:")
-            print((await page.content())[:2000])
+            print(f"Download wait failed: {e}")
+            print("Final page snippet:")
+            print((await page.content())[:2500])
 
         await browser.close()
 
