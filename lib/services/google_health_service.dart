@@ -118,6 +118,71 @@ class GoogleHealthService {
     return preferred;
   }
 
+  /// Fetch heart-rate samples for a time range (1s resolution).
+  static Future<List<Map<String, dynamic>>> getHeartRatePoints({
+    required String startTime,
+    required String endTime,
+  }) async {
+    final token = await GoogleHealthAuth.getAccessToken();
+    if (token == null) throw Exception('Not logged in');
+
+    final start = DateTime.tryParse(startTime);
+    final end = DateTime.tryParse(endTime);
+    if (start == null || end == null) return [];
+
+    final results = <Map<String, dynamic>>[];
+    String? pageToken;
+    int pages = 0;
+    const maxPages = 15;
+
+    do {
+      final query = {
+        'pageSize': '1000',
+        if (pageToken != null) 'pageToken': pageToken!,
+      };
+      final uri = Uri.parse(
+        '$_baseUrl/users/me/dataTypes/heart-rate/dataPoints',
+      ).replace(queryParameters: query);
+
+      final response = await http.get(
+        uri,
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Accept': 'application/json',
+        },
+      );
+
+      if (response.statusCode != 200) break;
+
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final points = (data['dataPoints'] as List<dynamic>? ?? [])
+          .map((p) => p as Map<String, dynamic>)
+          .toList();
+
+      for (final p in points) {
+        final sampleTime = p['heartRate']?['sampleTime']?['time']?.toString();
+        final bpm = p['heartRate']?['beatsPerMinute'];
+        final t = DateTime.tryParse(sampleTime ?? '');
+        if (t == null || bpm == null) continue;
+        if (!t.isBefore(start) && t.isBefore(end)) {
+          results.add({'time': t.toIso8601String(), 'bpm': (bpm as num).toDouble()});
+        }
+      }
+
+      pageToken = data['nextPageToken'] as String?;
+      pages++;
+
+      if (points.isNotEmpty) {
+        final oldestTime = points.last['heartRate']?['sampleTime']?['time']?.toString();
+        final oldest = DateTime.tryParse(oldestTime ?? '');
+        if (oldest != null && oldest.isBefore(start)) break;
+      }
+    } while (pageToken != null && pages < maxPages);
+
+    results.sort((a, b) => (a['time'] as String).compareTo(b['time'] as String));
+    return results;
+  }
+
   /// Export GPS route as TCX and parse trackpoints (namespace-aware).
   static Future<List<Map<String, dynamic>>> getExerciseRoute(String exerciseName) async {
     final token = await GoogleHealthAuth.getAccessToken();
@@ -142,7 +207,6 @@ class GoogleHealthService {
 
     final doc = XmlDocument.parse(response.body);
 
-    // TCX uses a default namespace – match by local name
     final trackpoints = <Map<String, dynamic>>[];
     for (final tp in doc.descendants.whereType<XmlElement>()) {
       if (tp.name.local != 'Trackpoint') continue;
