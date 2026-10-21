@@ -71,7 +71,7 @@ class GoogleHealthService {
     final candidates = <Map<String, dynamic>>[];
     String? pageToken;
     int pages = 0;
-    const maxPages = 5;
+    const maxPages = 8;
 
     do {
       final query = {
@@ -130,7 +130,7 @@ class GoogleHealthService {
     return preferred;
   }
 
-  /// Fetch heart-rate samples for a time range using server-side filter.
+  /// Fetch all heart-rate samples for a time range using server-side filter + full pagination.
   static Future<List<Map<String, dynamic>>> getHeartRatePoints({
     required String startTime,
     required String endTime,
@@ -154,7 +154,7 @@ class GoogleHealthService {
     final results = <Map<String, dynamic>>[];
     String? pageToken;
     int pages = 0;
-    const maxPages = 10;
+    const maxPages = 20; // enough for ~20k points (half marathon+)
 
     do {
       final query = {
@@ -200,7 +200,6 @@ class GoogleHealthService {
 
       pageToken = data['nextPageToken'] as String?;
       pages++;
-      if (results.length > 800) break;
     } while (pageToken != null && pages < maxPages);
 
     results.sort((a, b) => (a['time'] as String).compareTo(b['time'] as String));
