@@ -24,11 +24,39 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
   bool _loadingRoute = true;
   String? _routeError;
 
+  List<Map<String, dynamic>> _hrPoints = [];
+  bool _loadingHr = true;
+
   @override
   void initState() {
     super.initState();
     _calculateSplits();
     _loadRoute();
+    _loadHeartRate();
+  }
+
+  Future<void> _loadHeartRate() async {
+    setState(() => _loadingHr = true);
+    try {
+      final exercise = widget.exercisePoint['exercise'] as Map<String, dynamic>? ?? {};
+      final interval = exercise['interval'] as Map<String, dynamic>? ?? {};
+      final start = interval['startTime'] as String? ?? '';
+      final end = interval['endTime'] as String? ?? '';
+      if (start.isEmpty || end.isEmpty) {
+        setState(() => _loadingHr = false);
+        return;
+      }
+      final points = await GoogleHealthService.getHeartRatePoints(
+        startTime: start,
+        endTime: end,
+      );
+      setState(() {
+        _hrPoints = points;
+        _loadingHr = false;
+      });
+    } catch (_) {
+      setState(() => _loadingHr = false);
+    }
   }
 
   Future<void> _loadRoute() async {
@@ -246,14 +274,33 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
   Widget _buildSplitChart() {
     if (_splits.isEmpty) return const SizedBox.shrink();
 
-    final spots = <FlSpot>[];
+    final paceSpots = <FlSpot>[];
     for (var i = 0; i < _splits.length; i++) {
       final pace = (_splits[i]['paceMinKm'] as num?)?.toDouble() ?? 0;
-      spots.add(FlSpot(i.toDouble() + 1, pace));
+      paceSpots.add(FlSpot(i.toDouble() + 1, pace));
+    }
+
+    // Average HR per split (simple window)
+    final hrSpots = <FlSpot>[];
+    if (_hrPoints.isNotEmpty && _splits.isNotEmpty) {
+      for (var i = 0; i < _splits.length; i++) {
+        final splitStart = DateTime.tryParse(_splits[i]['startTime'] ?? '');
+        final splitEnd = DateTime.tryParse(_splits[i]['endTime'] ?? '');
+        if (splitStart == null || splitEnd == null) continue;
+
+        final inSplit = _hrPoints.where((p) {
+          final t = DateTime.tryParse(p['time'] ?? '');
+          return t != null && !t.isBefore(splitStart) && t.isBefore(splitEnd);
+        }).toList();
+
+        if (inSplit.isEmpty) continue;
+        final avg = inSplit.map((p) => (p['bpm'] as num).toDouble()).reduce((a, b) => a + b) / inSplit.length;
+        hrSpots.add(FlSpot(i.toDouble() + 1, avg));
+      }
     }
 
     return SizedBox(
-      height: 240,
+      height: 260,
       child: LineChart(
         LineChartData(
           gridData: const FlGridData(show: true),
@@ -276,27 +323,48 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
                 reservedSize: 48,
                 getTitlesWidget: (value, meta) => Text(
                   value.toStringAsFixed(1),
-                  style: const TextStyle(fontSize: 11),
+                  style: const TextStyle(fontSize: 11, color: Colors.blue),
                 ),
               ),
-              axisNameWidget: const Text('min/km'),
+              axisNameWidget: const Text('min/km', style: TextStyle(color: Colors.blue)),
+            ),
+            rightTitles: AxisTitles(
+              sideTitles: SideTitles(
+                showTitles: hrSpots.isNotEmpty,
+                reservedSize: 40,
+                getTitlesWidget: (value, meta) => Text(
+                  value.toStringAsFixed(0),
+                  style: const TextStyle(fontSize: 11, color: Colors.red),
+                ),
+              ),
+              axisNameWidget: hrSpots.isNotEmpty
+                  ? const Text('bpm', style: TextStyle(color: Colors.red))
+                  : null,
             ),
             topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-            rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
           ),
           borderData: FlBorderData(show: true),
           lineBarsData: [
             LineChartBarData(
-              spots: spots,
+              spots: paceSpots,
               isCurved: true,
-              color: Theme.of(context).colorScheme.primary,
+              color: Colors.blue,
               barWidth: 3,
               dotData: const FlDotData(show: true),
               belowBarData: BarAreaData(
                 show: true,
-                color: Theme.of(context).colorScheme.primary.withOpacity(0.15),
+                color: Colors.blue.withOpacity(0.12),
               ),
             ),
+            if (hrSpots.isNotEmpty)
+              LineChartBarData(
+                spots: hrSpots,
+                isCurved: true,
+                color: Colors.red,
+                barWidth: 2.5,
+                dotData: const FlDotData(show: false),
+                belowBarData: BarAreaData(show: false),
+              ),
           ],
         ),
       ),
@@ -340,9 +408,12 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
           const SizedBox(height: 8),
           _buildMap(),
           const SizedBox(height: 24),
-          Text('Pace pro Split', style: Theme.of(context).textTheme.titleLarge),
+          Text('Pace & Herzfrequenz pro Split', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 8),
-          if (!_loadingSplits && _splits.isNotEmpty) _buildSplitChart(),
+          if (_loadingHr || _loadingSplits)
+            const Center(child: CircularProgressIndicator())
+          else if (_splits.isNotEmpty)
+            _buildSplitChart(),
           const SizedBox(height: 24),
           Row(
             children: [
