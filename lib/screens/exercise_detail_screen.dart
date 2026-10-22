@@ -21,6 +21,7 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
   String _debugInfo = '';
   double _splitDistanceKm = 1.0;
   bool _showKmh = false;
+  bool _trimWarmupCooldown = false;
 
   List<LatLng> _routePoints = [];
   bool _loadingRoute = true;
@@ -39,6 +40,47 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
     _calculateSplits();
     _loadRoute();
     _loadHeartRate();
+  }
+
+  /// Detect main-effort window by finding where pace settles near the median.
+  /// Returns (startMinute, endMinute) or null if no clear trim.
+  (double, double)? _detectMainEffort(List<FlSpot> paceSpots) {
+    if (paceSpots.length < 6) return null;
+
+    final paces = paceSpots.map((s) => s.y).toList()..sort();
+    final median = paces[paces.length ~/ 2];
+    if (median <= 0) return null;
+
+    const threshold = 0.18; // within 18% of median = "settled"
+
+    int startIdx = 0;
+    for (var i = 0; i < paceSpots.length - 2; i++) {
+      final a = (paceSpots[i].y - median).abs() / median;
+      final b = (paceSpots[i + 1].y - median).abs() / median;
+      if (a < threshold && b < threshold) {
+        startIdx = i;
+        break;
+      }
+    }
+
+    int endIdx = paceSpots.length - 1;
+    for (var i = paceSpots.length - 1; i > 1; i--) {
+      final a = (paceSpots[i].y - median).abs() / median;
+      final b = (paceSpots[i - 1].y - median).abs() / median;
+      if (a < threshold && b < threshold) {
+        endIdx = i;
+        break;
+      }
+    }
+
+    if (endIdx <= startIdx + 2) return null;
+    return (paceSpots[startIdx].x, paceSpots[endIdx].x);
+  }
+
+  List<FlSpot> _applyTrim(List<FlSpot> spots, (double, double)? window) {
+    if (window == null || !_trimWarmupCooldown) return spots;
+    final (s, e) = window;
+    return spots.where((sp) => sp.x >= s && sp.x <= e).toList();
   }
 
   Future<void> _loadHeartRate() async {
@@ -63,12 +105,10 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
       final start = DateTime.tryParse(startStr);
       final end = DateTime.tryParse(endStr);
 
-      // Prefer chest-strap HR from Runkeeper GPX if available in this window
       List<Map<String, dynamic>> points = [];
       String source = 'Google';
 
       if (start != null && end != null) {
-        // Pass window so only relevant GPX files are parsed (and result is cached)
         final gpxSamples = await RunkeeperService.loadHeartRateSamples(
           windowStart: start,
           windowEnd: end,
@@ -89,7 +129,6 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
         }
       }
 
-      // Fallback to Google Health
       if (points.isEmpty) {
         points = await GoogleHealthService.getHeartRatePoints(
           startTime: startStr,
@@ -364,7 +403,7 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
       final minutes = t.difference(start).inSeconds / 60.0;
       if (minutes >= 0) rawHr.add(FlSpot(minutes, bpm));
     }
-    final hrSpots = _smooth(rawHr, maxJump: 0.25);
+    var hrSpots = _smooth(rawHr, maxJump: 0.25);
 
     final rawSpeed = <FlSpot>[];
     for (final p in _distancePoints) {
@@ -387,7 +426,14 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
         rawSpeed.add(FlSpot(minutes, value));
       }
     }
-    final speedSpots = _smooth(rawSpeed, maxJump: 0.4);
+    var speedSpots = _smooth(rawSpeed, maxJump: 0.4);
+
+    // Warmup/Cooldown trim based on pace settling near median
+    final window = _detectMainEffort(speedSpots);
+    if (_trimWarmupCooldown && window != null) {
+      speedSpots = _applyTrim(speedSpots, window);
+      hrSpots = _applyTrim(hrSpots, window);
+    }
 
     if (hrSpots.isEmpty && speedSpots.isEmpty) return const SizedBox.shrink();
 
@@ -431,8 +477,13 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
             child: Text(_hrDebug, style: const TextStyle(fontSize: 12, color: Colors.grey)),
           ),
         Row(
-          mainAxisAlignment: MainAxisAlignment.end,
           children: [
+            Checkbox(
+              value: _trimWarmupCooldown,
+              onChanged: (v) => setState(() => _trimWarmupCooldown = v ?? false),
+            ),
+            const Text('Warmup/Cooldown ausblenden'),
+            const Spacer(),
             const Text('min/km'),
             Switch(
               value: _showKmh,
