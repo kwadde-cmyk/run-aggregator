@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../services/google_health_auth.dart';
 import '../services/google_health_service.dart';
 import '../services/runkeeper_service.dart';
+import '../services/weather_service.dart';
 import 'login_screen.dart';
 import 'exercise_detail_screen.dart';
 import 'runkeeper_login_screen.dart';
@@ -16,20 +17,22 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   List<Map<String, dynamic>> _exercises = [];
+  final Map<String, double?> _temperatures = {};
   bool _loading = true;
   String? _error;
   bool _runkeeperBusy = false;
 
   // Filters
-  int? _weekday; // 1=Mon ... 7=Sun
+  int? _weekday;
   double? _minDistKm;
   double? _maxDistKm;
   double? _minAvgHr;
   double? _maxAvgHr;
-  double? _minPace; // min/km
+  double? _minPace;
   double? _maxPace;
+  double? _minTemp;
+  double? _maxTemp;
 
-  // Multi-select for comparison
   final Set<int> _selected = {};
 
   @override
@@ -96,6 +99,8 @@ class _HomeScreenState extends State<HomeScreen> {
         _loading = false;
         _selected.clear();
       });
+      // Load temperatures in background
+      _loadTemperatures(runs);
     } catch (e) {
       final msg = e.toString();
       if (msg.contains('401') || msg.contains('UNAUTHENTICATED')) {
@@ -114,11 +119,31 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _loadTemperatures(List<Map<String, dynamic>> runs) async {
+    for (final item in runs) {
+      final name = item['name'] as String? ?? '';
+      final exercise = item['exercise'] as Map<String, dynamic>? ?? {};
+      final interval = exercise['interval'] as Map<String, dynamic>? ?? {};
+      final start = interval['startTime'] as String? ?? '';
+      if (name.isEmpty || start.isEmpty) continue;
+      if (_temperatures.containsKey(name)) continue;
+
+      final temp = await WeatherService.getTemperatureForExercise(
+        exerciseName: name,
+        startTimeIso: start,
+      );
+      if (mounted) {
+        setState(() => _temperatures[name] = temp);
+      }
+    }
+  }
+
   List<Map<String, dynamic>> get _filtered {
     return _exercises.where((item) {
       final exercise = item['exercise'] as Map<String, dynamic>? ?? {};
       final interval = exercise['interval'] as Map<String, dynamic>? ?? {};
       final metrics = exercise['metricsSummary'] as Map<String, dynamic>? ?? {};
+      final name = item['name'] as String? ?? '';
 
       final startStr = interval['startTime'] as String? ?? '';
       final start = DateTime.tryParse(startStr);
@@ -139,6 +164,10 @@ class _HomeScreenState extends State<HomeScreen> {
       if (_minPace != null && (paceMinKm == null || paceMinKm < _minPace!)) return false;
       if (_maxPace != null && (paceMinKm == null || paceMinKm > _maxPace!)) return false;
 
+      final temp = _temperatures[name];
+      if (_minTemp != null && (temp == null || temp < _minTemp!)) return false;
+      if (_maxTemp != null && (temp == null || temp > _maxTemp!)) return false;
+
       return true;
     }).toList();
   }
@@ -155,7 +184,9 @@ class _HomeScreenState extends State<HomeScreen> {
         maxHr: _maxAvgHr,
         minPace: _minPace,
         maxPace: _maxPace,
-        onApply: (w, minD, maxD, minH, maxH, minP, maxP) {
+        minTemp: _minTemp,
+        maxTemp: _maxTemp,
+        onApply: (w, minD, maxD, minH, maxH, minP, maxP, minT, maxT) {
           setState(() {
             _weekday = w;
             _minDistKm = minD;
@@ -164,6 +195,8 @@ class _HomeScreenState extends State<HomeScreen> {
             _maxAvgHr = maxH;
             _minPace = minP;
             _maxPace = maxP;
+            _minTemp = minT;
+            _maxTemp = maxT;
             _selected.clear();
           });
         },
@@ -204,7 +237,8 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final filtered = _filtered;
     final hasFilters = _weekday != null || _minDistKm != null || _maxDistKm != null ||
-        _minAvgHr != null || _maxAvgHr != null || _minPace != null || _maxPace != null;
+        _minAvgHr != null || _maxAvgHr != null || _minPace != null || _maxPace != null ||
+        _minTemp != null || _maxTemp != null;
 
     return Scaffold(
       appBar: AppBar(
@@ -287,6 +321,9 @@ class _HomeScreenState extends State<HomeScreen> {
                           final distanceMm = metrics['distanceMillimeters'];
                           final distanceKm = distanceMm != null ? (distanceMm / 1000000).toStringAsFixed(2) : '-';
                           final selected = _selected.contains(index);
+                          final exName = item['name'] as String? ?? '';
+                          final temp = _temperatures[exName];
+                          final tempStr = temp != null ? ' · ${temp.toStringAsFixed(0)}°C' : '';
 
                           return ListTile(
                             leading: Checkbox(
@@ -302,7 +339,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               },
                             ),
                             title: Text('$type – $name'),
-                            subtitle: Text('$start · $distanceKm km'),
+                            subtitle: Text('$start · $distanceKm km$tempStr'),
                             selected: selected,
                             onTap: () {
                               Navigator.of(context).push(
@@ -321,8 +358,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
 class _FilterSheet extends StatefulWidget {
   final int? weekday;
-  final double? minDist, maxDist, minHr, maxHr, minPace, maxPace;
-  final void Function(int?, double?, double?, double?, double?, double?, double?) onApply;
+  final double? minDist, maxDist, minHr, maxHr, minPace, maxPace, minTemp, maxTemp;
+  final void Function(int?, double?, double?, double?, double?, double?, double?, double?, double?) onApply;
 
   const _FilterSheet({
     required this.weekday,
@@ -332,6 +369,8 @@ class _FilterSheet extends StatefulWidget {
     required this.maxHr,
     required this.minPace,
     required this.maxPace,
+    required this.minTemp,
+    required this.maxTemp,
     required this.onApply,
   });
 
@@ -341,7 +380,7 @@ class _FilterSheet extends StatefulWidget {
 
 class _FilterSheetState extends State<_FilterSheet> {
   late int? _weekday;
-  late final TextEditingController _minDist, _maxDist, _minHr, _maxHr, _minPace, _maxPace;
+  late final TextEditingController _minDist, _maxDist, _minHr, _maxHr, _minPace, _maxPace, _minTemp, _maxTemp;
 
   @override
   void initState() {
@@ -353,6 +392,8 @@ class _FilterSheetState extends State<_FilterSheet> {
     _maxHr = TextEditingController(text: widget.maxHr?.toString() ?? '');
     _minPace = TextEditingController(text: widget.minPace?.toString() ?? '');
     _maxPace = TextEditingController(text: widget.maxPace?.toString() ?? '');
+    _minTemp = TextEditingController(text: widget.minTemp?.toString() ?? '');
+    _maxTemp = TextEditingController(text: widget.maxTemp?.toString() ?? '');
   }
 
   @override
@@ -363,6 +404,8 @@ class _FilterSheetState extends State<_FilterSheet> {
     _maxHr.dispose();
     _minPace.dispose();
     _maxPace.dispose();
+    _minTemp.dispose();
+    _maxTemp.dispose();
     super.dispose();
   }
 
@@ -418,6 +461,12 @@ class _FilterSheetState extends State<_FilterSheet> {
               const SizedBox(width: 8),
               Expanded(child: TextField(controller: _maxPace, decoration: const InputDecoration(labelText: 'max'), keyboardType: TextInputType.number)),
             ]),
+            const SizedBox(height: 8),
+            Row(children: [
+              Expanded(child: TextField(controller: _minTemp, decoration: const InputDecoration(labelText: 'Temp min (°C)'), keyboardType: TextInputType.number)),
+              const SizedBox(width: 8),
+              Expanded(child: TextField(controller: _maxTemp, decoration: const InputDecoration(labelText: 'max'), keyboardType: TextInputType.number)),
+            ]),
             const SizedBox(height: 16),
             Row(
               children: [
@@ -428,6 +477,7 @@ class _FilterSheetState extends State<_FilterSheet> {
                       _minDist.clear(); _maxDist.clear();
                       _minHr.clear(); _maxHr.clear();
                       _minPace.clear(); _maxPace.clear();
+                      _minTemp.clear(); _maxTemp.clear();
                     });
                   },
                   child: const Text('Zurücksetzen'),
@@ -443,6 +493,8 @@ class _FilterSheetState extends State<_FilterSheet> {
                       _parse(_maxHr.text),
                       _parse(_minPace.text),
                       _parse(_maxPace.text),
+                      _parse(_minTemp.text),
+                      _parse(_maxTemp.text),
                     );
                     Navigator.pop(context);
                   },
