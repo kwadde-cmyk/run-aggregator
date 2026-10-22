@@ -32,7 +32,14 @@ jobs:
 
       - name: Decode keystore
         run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/upload-keystore.jks
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > /tmp/upload-keystore.jks
+          ls -la /tmp/upload-keystore.jks
+
+      - name: Verify keystore
+        run: |
+          keytool -list -keystore /tmp/upload-keystore.jks \
+            -storepass "${{ secrets.STORE_PASSWORD }}" \
+            -alias "${{ secrets.KEY_ALIAS }}"
 
       - name: Create key.properties
         run: |
@@ -40,7 +47,7 @@ jobs:
           storePassword=${{ secrets.STORE_PASSWORD }}
           keyPassword=${{ secrets.KEY_PASSWORD }}
           keyAlias=${{ secrets.KEY_ALIAS }}
-          storeFile=upload-keystore.jks
+          storeFile=/tmp/upload-keystore.jks
           EOF
 
       - name: Build release APK (split per ABI)
