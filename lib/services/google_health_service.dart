@@ -7,8 +7,9 @@ import 'data_cache.dart';
 class GoogleHealthService {
   static const _baseUrl = 'https://health.googleapis.com/v4';
 
+  /// Fetch exercises going back ~2 weeks (or more if available).
   static Future<List<Map<String, dynamic>>> getExercises({
-    int pageSize = 20,
+    int pageSize = 50,
     bool forceRefresh = false,
   }) async {
     const key = 'exercises';
@@ -22,29 +23,58 @@ class GoogleHealthService {
       throw Exception('Not logged in');
     }
 
-    final uri = Uri.parse(
-      '$_baseUrl/users/me/dataTypes/exercise/dataPoints?pageSize=$pageSize',
-    );
+    final all = <Map<String, dynamic>>[];
+    String? pageToken;
+    int pages = 0;
+    const maxPages = 6; // up to ~300 exercises
 
-    final response = await http.get(
-      uri,
-      headers: {
-        'Authorization': 'Bearer $token',
-        'Accept': 'application/json',
-      },
-    );
+    do {
+      final query = {
+        'pageSize': pageSize.toString(),
+        if (pageToken != null) 'pageToken': pageToken!,
+      };
+      final uri = Uri.parse(
+        '$_baseUrl/users/me/dataTypes/exercise/dataPoints',
+      ).replace(queryParameters: query);
 
-    if (response.statusCode != 200) {
-      throw Exception('Failed to load exercises: ${response.statusCode} ${response.body}');
-    }
+      final response = await http.get(
+        uri,
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Accept': 'application/json',
+        },
+      );
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
-    final points = (data['dataPoints'] as List<dynamic>? ?? [])
-        .map((p) => p as Map<String, dynamic>)
-        .toList();
+      if (response.statusCode != 200) {
+        throw Exception('Failed to load exercises: ${response.statusCode} ${response.body}');
+      }
 
-    DataCache.set(key, points);
-    return points;
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final points = (data['dataPoints'] as List<dynamic>? ?? [])
+          .map((p) => p as Map<String, dynamic>)
+          .toList();
+
+      all.addAll(points);
+
+      pageToken = data['nextPageToken'] as String?;
+      pages++;
+
+      // Stop early if we have enough history (oldest point older than 16 days)
+      if (all.isNotEmpty) {
+        final oldest = all.last;
+        final interval = oldest['exercise']?['interval'] as Map<String, dynamic>? ?? {};
+        final startStr = interval['startTime'] as String? ?? '';
+        final start = DateTime.tryParse(startStr);
+        if (start != null && DateTime.now().difference(start).inDays > 16) {
+          break;
+        }
+      }
+    } while (pageToken != null && pages < maxPages);
+
+    // ignore: avoid_print
+    print('Exercises loaded: ${all.length} (pages: $pages)');
+    DataCache.set(key, all);
+    return all;
   }
 
   /// Fetch distance points for a time range using server-side filter.
@@ -71,7 +101,7 @@ class GoogleHealthService {
     final candidates = <Map<String, dynamic>>[];
     String? pageToken;
     int pages = 0;
-    const maxPages = 8;
+    const maxPages = 12;
 
     do {
       final query = {
@@ -107,6 +137,9 @@ class GoogleHealthService {
       pageToken = data['nextPageToken'] as String?;
       pages++;
     } while (pageToken != null && pages < maxPages);
+
+    // ignore: avoid_print
+    print('Distance points: ${candidates.length} (pages: $pages) for $startTime');
 
     if (candidates.isEmpty) {
       DataCache.set(key, <Map<String, dynamic>>[]);
@@ -154,7 +187,7 @@ class GoogleHealthService {
     final results = <Map<String, dynamic>>[];
     String? pageToken;
     int pages = 0;
-    const maxPages = 20; // enough for ~20k points (half marathon+)
+    const maxPages = 20;
 
     do {
       final query = {
