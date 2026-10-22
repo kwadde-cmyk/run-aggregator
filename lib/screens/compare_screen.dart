@@ -1,6 +1,7 @@
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import '../services/google_health_service.dart';
+import '../services/weather_service.dart';
 import 'exercise_detail_screen.dart';
 
 class CompareScreen extends StatefulWidget {
@@ -14,9 +15,10 @@ class CompareScreen extends StatefulWidget {
 
 class _CompareScreenState extends State<CompareScreen> {
   bool _loading = true;
-  final List<List<FlSpot>> _paceSeries = []; // stored as min/km
+  final List<List<FlSpot>> _paceSeries = [];
   final List<List<FlSpot>> _hrSeries = [];
   final List<String> _labels = [];
+  final List<double?> _temps = [];
   bool _showKmh = false;
   bool _trimWarmup = false;
 
@@ -87,9 +89,19 @@ class _CompareScreenState extends State<CompareScreen> {
       final startStr = interval['startTime'] as String? ?? '';
       final endStr = interval['endTime'] as String? ?? '';
       final start = DateTime.tryParse(startStr);
+      final name = item['name'] as String? ?? '';
 
       final startDt = DateTime.tryParse(startStr);
       _labels.add(startDt != null ? '${startDt.day}.${startDt.month}.' : '?');
+
+      double? temp;
+      if (name.isNotEmpty && startStr.isNotEmpty) {
+        temp = await WeatherService.getTemperatureForExercise(
+          exerciseName: name,
+          startTimeIso: startStr,
+        );
+      }
+      _temps.add(temp);
 
       final paceSpots = <FlSpot>[];
       final hrSpots = <FlSpot>[];
@@ -166,12 +178,13 @@ class _CompareScreenState extends State<CompareScreen> {
           spacing: 12,
           children: List.generate(series.length, (i) {
             final color = _colors[i % _colors.length];
+            final temp = i < _temps.length && _temps[i] != null ? ' (${_temps[i]!.toStringAsFixed(0)}°C)' : '';
             return Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Container(width: 12, height: 12, color: color.withOpacity(0.7)),
                 const SizedBox(width: 4),
-                Text(_labels[i], style: const TextStyle(fontSize: 12)),
+                Text('${_labels[i]}$temp', style: const TextStyle(fontSize: 12)),
               ],
             );
           }),
@@ -258,9 +271,11 @@ class _CompareScreenState extends State<CompareScreen> {
                       DataColumn(label: Text('Dauer')),
                       DataColumn(label: Text('Ø HF')),
                       DataColumn(label: Text('Ø Pace')),
+                      DataColumn(label: Text('Temp')),
                       DataColumn(label: Text('Kalorien')),
                     ],
                     rows: widget.exercises.asMap().entries.map((entry) {
+                      final idx = entry.key;
                       final item = entry.value;
                       final exercise = item['exercise'] as Map<String, dynamic>? ?? {};
                       final interval = exercise['interval'] as Map<String, dynamic>? ?? {};
@@ -286,6 +301,9 @@ class _CompareScreenState extends State<CompareScreen> {
                       final cal = _toDouble(metrics['caloriesKcal']);
                       final calStr = cal != null ? cal.toStringAsFixed(0) : '-';
 
+                      final temp = idx < _temps.length ? _temps[idx] : null;
+                      final tempStr = temp != null ? '${temp.toStringAsFixed(0)}°C' : '-';
+
                       return DataRow(
                         cells: [
                           DataCell(
@@ -300,6 +318,7 @@ class _CompareScreenState extends State<CompareScreen> {
                           DataCell(Text(duration)),
                           DataCell(Text('$hrStr bpm')),
                           DataCell(Text('$paceStr min/km')),
+                          DataCell(Text(tempStr)),
                           DataCell(Text(calStr)),
                         ],
                       );
