@@ -6,6 +6,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:xml/xml.dart';
+import 'data_cache.dart';
 
 class RunkeeperService {
   static const _storage = FlutterSecureStorage();
@@ -59,6 +60,7 @@ class RunkeeperService {
 
     await _doExportAndDownload();
     await _setLastImport(DateTime.now());
+    DataCache.clearPrefix('runkeeper_hr');
     return true;
   }
 
@@ -66,8 +68,6 @@ class RunkeeperService {
     final cookieHeader = await _cookieHeader();
     if (cookieHeader == null) throw Exception('No Runkeeper cookies');
 
-    // Submit PORTABILITY export (full data package with GPX)
-    // Form: _eventName=handleExport & exportType=PORTABILITY
     // ignore: avoid_print
     print('Runkeeper: submitting portability export');
     final exportRes = await http.post(
@@ -87,7 +87,6 @@ class RunkeeperService {
       throw Exception('Export submit failed: ${exportRes.statusCode}');
     }
 
-    // Poll for the newest "Download Package" link
     String? zipUrl;
     for (var i = 0; i < 36; i++) {
       await Future.delayed(const Duration(seconds: 5));
@@ -96,7 +95,6 @@ class RunkeeperService {
         headers: {'Cookie': cookieHeader, 'User-Agent': 'Mozilla/5.0'},
       );
 
-      // Look for "Download Package" links first (portability)
       final packageMatch = RegExp(
         r'href="(https://s3\.amazonaws\.com/hrmfile\.runkeeper\.com/export/[^"]+\.zip)"[^>]*>Download Package',
       ).firstMatch(page.body);
@@ -107,7 +105,6 @@ class RunkeeperService {
         break;
       }
 
-      // Fallback: any newest S3 zip (in case the label differs)
       final anyMatch = RegExp(
         r'href="(https://s3\.amazonaws\.com/hrmfile\.runkeeper\.com/export/[^"]+\.zip)"',
       ).firstMatch(page.body);
@@ -123,7 +120,6 @@ class RunkeeperService {
 
     if (zipUrl == null) throw Exception('No download link appeared');
 
-    // Download ZIP
     // ignore: avoid_print
     print('Runkeeper: downloading $zipUrl');
     final zipRes = await http.get(Uri.parse(zipUrl));
@@ -133,13 +129,12 @@ class RunkeeperService {
 
     final bytes = zipRes.bodyBytes;
     // ignore: avoid_print
-    print('Runkeeper: ZIP size ${bytes.length} bytes, magic: ${bytes.take(4).map((b) => b.toRadixString(16)).join(" ")}');
+    print('Runkeeper: ZIP size ${bytes.length} bytes');
 
     final dir = await getApplicationDocumentsDirectory();
     final zipFile = File('${dir.path}/runkeeper-latest.zip');
     await zipFile.writeAsBytes(bytes);
 
-    // Extract
     Archive archive;
     try {
       archive = ZipDecoder().decodeBytes(bytes);
@@ -147,13 +142,6 @@ class RunkeeperService {
       // ignore: avoid_print
       print('Runkeeper: ZIP decode failed: $e');
       return;
-    }
-
-    // ignore: avoid_print
-    print('Runkeeper: ZIP contains ${archive.length} entries:');
-    for (final f in archive.take(40)) {
-      // ignore: avoid_print
-      print('  ${f.isFile ? "FILE" : "DIR "} ${f.name} (${f.size} bytes)');
     }
 
     final gpxDir = Directory('${dir.path}/runkeeper-gpx');
@@ -169,7 +157,7 @@ class RunkeeperService {
       }
     }
     // ignore: avoid_print
-    print('Runkeeper: extracted $gpxCount GPX files to ${gpxDir.path}');
+    print('Runkeeper: extracted $gpxCount GPX files');
   }
 
   static String _formatDate(DateTime dt) {
@@ -177,51 +165,79 @@ class RunkeeperService {
     return '${dt.day.toString().padLeft(2,'0')}-${months[dt.month-1]}-${(dt.year%100).toString().padLeft(2,'0')}';
   }
 
-  /// Load HR samples from the most recent GPX files.
-  static Future<List<Map<String, dynamic>>> loadHeartRateSamples() async {
+  /// Extract date from GPX filename like "2026-10-20-142717.gpx" → DateTime(2026,10,20)
+  static DateTime? _dateFromFilename(String name) {
+    final match = RegExp(r'(\d{4})-(\d{2})-(\d{2})').firstMatch(name);
+    if (match == null) return null;
+    return DateTime(
+      int.parse(match.group(1)!),
+      int.parse(match.group(2)!),
+      int.parse(match.group(3)!),
+    );
+  }
+
+  /// Load HR samples. Optionally filter to files whose date is near [windowStart]/[windowEnd].
+  /// Results are cached per window so the same run doesn't re-parse GPX files.
+  static Future<List<Map<String, dynamic>>> loadHeartRateSamples({
+    DateTime? windowStart,
+    DateTime? windowEnd,
+  }) async {
+    final cacheKey = 'runkeeper_hr|${windowStart?.toIso8601String() ?? "all"}|${windowEnd?.toIso8601String() ?? "all"}';
+    final cached = DataCache.get<List<Map<String, dynamic>>>(cacheKey);
+    if (cached != null) return cached;
+
     final dir = await getApplicationDocumentsDirectory();
     final gpxDir = Directory('${dir.path}/runkeeper-gpx');
-    if (!await gpxDir.exists()) {
-      // ignore: avoid_print
-      print('Runkeeper: gpx dir does not exist');
-      return [];
-    }
+    if (!await gpxDir.exists()) return [];
 
     final samples = <Map<String, dynamic>>[];
-    int fileCount = 0;
+    int filesParsed = 0;
+
     await for (final entity in gpxDir.list()) {
-      if (entity is File && entity.path.toLowerCase().endsWith('.gpx')) {
-        fileCount++;
-        final xml = await entity.readAsString();
-        final doc = XmlDocument.parse(xml);
-        int hrInFile = 0;
-        for (final pt in doc.findAllElements('trkpt')) {
-          final timeEl = pt.findElements('time').firstOrNull;
-          if (timeEl == null) continue;
+      if (entity is! File || !entity.path.toLowerCase().endsWith('.gpx')) continue;
 
-          XmlElement? hrEl;
-          for (final el in pt.descendants.whereType<XmlElement>()) {
-            if (el.name.local == 'hr') {
-              hrEl = el;
-              break;
-            }
-          }
-          if (hrEl == null) continue;
+      final fileName = entity.path.split('/').last;
+      final fileDate = _dateFromFilename(fileName);
 
-          final t = DateTime.tryParse(timeEl.innerText);
-          final hr = int.tryParse(hrEl.innerText);
-          if (t != null && hr != null) {
-            samples.add({'time': t, 'hr': hr});
-            hrInFile++;
+      // Pre-filter by filename date if a window is given (±1 day tolerance)
+      if (windowStart != null && windowEnd != null && fileDate != null) {
+        final windowStartDay = DateTime(windowStart.year, windowStart.month, windowStart.day);
+        final windowEndDay = DateTime(windowEnd.year, windowEnd.month, windowEnd.day);
+        if (fileDate.isBefore(windowStartDay.subtract(const Duration(days: 1))) ||
+            fileDate.isAfter(windowEndDay.add(const Duration(days: 1)))) {
+          continue;
+        }
+      }
+
+      filesParsed++;
+      final xml = await entity.readAsString();
+      final doc = XmlDocument.parse(xml);
+
+      for (final pt in doc.findAllElements('trkpt')) {
+        final timeEl = pt.findElements('time').firstOrNull;
+        if (timeEl == null) continue;
+
+        XmlElement? hrEl;
+        for (final el in pt.descendants.whereType<XmlElement>()) {
+          if (el.name.local == 'hr') {
+            hrEl = el;
+            break;
           }
         }
-        // ignore: avoid_print
-        print('Runkeeper: ${entity.path.split('/').last} → $hrInFile HR points');
+        if (hrEl == null) continue;
+
+        final t = DateTime.tryParse(timeEl.innerText);
+        final hr = int.tryParse(hrEl.innerText);
+        if (t != null && hr != null) {
+          samples.add({'time': t, 'hr': hr});
+        }
       }
     }
+
     samples.sort((a, b) => (a['time'] as DateTime).compareTo(b['time'] as DateTime));
     // ignore: avoid_print
-    print('Runkeeper: total $fileCount GPX files, ${samples.length} HR samples');
+    print('Runkeeper: parsed $filesParsed GPX files → ${samples.length} HR samples (cached)');
+    DataCache.set(cacheKey, samples);
     return samples;
   }
 }
