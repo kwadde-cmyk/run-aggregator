@@ -1,0 +1,7 @@
+# Copy this file to android/key.properties and fill in your values.
+# Do NOT commit key.properties or your .keystore file.
+
+storePassword=YOUR_STORE_PASSWORD
+keyPassword=YOUR_KEY_PASSWORD
+keyAlias=runaggregator
+storeFile=/home/kwadde/run-aggregator.keystore
