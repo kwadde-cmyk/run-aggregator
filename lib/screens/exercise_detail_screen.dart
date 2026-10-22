@@ -68,7 +68,11 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
       String source = 'Google';
 
       if (start != null && end != null) {
-        final gpxSamples = await RunkeeperService.loadHeartRateSamples();
+        // Pass window so only relevant GPX files are parsed (and result is cached)
+        final gpxSamples = await RunkeeperService.loadHeartRateSamples(
+          windowStart: start,
+          windowEnd: end,
+        );
         final filtered = gpxSamples.where((s) {
           final t = s['time'] as DateTime?;
           final hr = s['hr'] as int?;
