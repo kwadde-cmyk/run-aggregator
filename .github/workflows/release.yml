@@ -32,7 +32,7 @@ jobs:
 
       - name: Decode keystore
         run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > /tmp/upload-keystore.jks
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | tr -d '\n\r ' | base64 --decode > /tmp/upload-keystore.jks
           ls -la /tmp/upload-keystore.jks
 
       - name: Verify keystore
