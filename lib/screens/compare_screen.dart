@@ -14,9 +14,11 @@ class CompareScreen extends StatefulWidget {
 
 class _CompareScreenState extends State<CompareScreen> {
   bool _loading = true;
-  final List<List<FlSpot>> _paceSeries = [];
+  final List<List<FlSpot>> _paceSeries = []; // stored as min/km
   final List<List<FlSpot>> _hrSeries = [];
   final List<String> _labels = [];
+  bool _showKmh = false;
+  bool _trimWarmup = false;
 
   static const _colors = [
     Colors.blue,
@@ -33,6 +35,43 @@ class _CompareScreenState extends State<CompareScreen> {
     if (v is num) return v.toDouble();
     if (v is String) return double.tryParse(v);
     return null;
+  }
+
+  (double, double)? _detectMainEffort(List<FlSpot> paceSpots) {
+    if (paceSpots.length < 6) return null;
+    final paces = paceSpots.map((s) => s.y).toList()..sort();
+    final median = paces[paces.length ~/ 2];
+    if (median <= 0) return null;
+    const threshold = 0.18;
+
+    int startIdx = 0;
+    for (var i = 0; i < paceSpots.length - 2; i++) {
+      final a = (paceSpots[i].y - median).abs() / median;
+      final b = (paceSpots[i + 1].y - median).abs() / median;
+      if (a < threshold && b < threshold) {
+        startIdx = i;
+        break;
+      }
+    }
+
+    int endIdx = paceSpots.length - 1;
+    for (var i = paceSpots.length - 1; i > 1; i--) {
+      final a = (paceSpots[i].y - median).abs() / median;
+      final b = (paceSpots[i - 1].y - median).abs() / median;
+      if (a < threshold && b < threshold) {
+        endIdx = i;
+        break;
+      }
+    }
+
+    if (endIdx <= startIdx + 2) return null;
+    return (paceSpots[startIdx].x, paceSpots[endIdx].x);
+  }
+
+  List<FlSpot> _applyTrim(List<FlSpot> spots, (double, double)? window) {
+    if (window == null) return spots;
+    final (s, e) = window;
+    return spots.where((sp) => sp.x >= s && sp.x <= e).toList();
   }
 
   @override
@@ -179,6 +218,28 @@ class _CompareScreenState extends State<CompareScreen> {
     );
   }
 
+  List<List<FlSpot>> get _displayPace {
+    return _paceSeries.map((series) {
+      var spots = series;
+      if (_trimWarmup) {
+        final window = _detectMainEffort(spots);
+        spots = _applyTrim(spots, window);
+      }
+      if (_showKmh) {
+        spots = spots.map((s) => FlSpot(s.x, s.y > 0 ? 60.0 / s.y : 0)).toList();
+      }
+      return spots;
+    }).toList();
+  }
+
+  List<List<FlSpot>> get _displayHr {
+    if (!_trimWarmup) return _hrSeries;
+    return List.generate(_hrSeries.length, (i) {
+      final window = _detectMainEffort(_paceSeries[i]);
+      return _applyTrim(_hrSeries[i], window);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -245,14 +306,43 @@ class _CompareScreenState extends State<CompareScreen> {
                     }).toList(),
                   ),
                 ),
-                const SizedBox(height: 24),
-                Text('Pace-Verlauf', style: Theme.of(context).textTheme.titleMedium),
+                const SizedBox(height: 16),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Checkbox(
+                          value: _trimWarmup,
+                          onChanged: (v) => setState(() => _trimWarmup = v ?? false),
+                        ),
+                        const Text('Warmup/Cooldown ausblenden'),
+                      ],
+                    ),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Text('min/km'),
+                        Switch(
+                          value: _showKmh,
+                          onChanged: (v) => setState(() => _showKmh = v),
+                        ),
+                        const Text('km/h'),
+                      ],
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Text(_showKmh ? 'Geschwindigkeit' : 'Pace-Verlauf', style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 8),
-                _buildOverlayChart(_paceSeries, 'min/km'),
+                _buildOverlayChart(_displayPace, _showKmh ? 'km/h' : 'min/km'),
                 const SizedBox(height: 24),
                 Text('HF-Verlauf', style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 8),
-                _buildOverlayChart(_hrSeries, 'bpm', isHr: true),
+                _buildOverlayChart(_displayHr, 'bpm', isHr: true),
                 const SizedBox(height: 16),
                 Text('Tipp: Datum antippen, um den Lauf zu öffnen.',
                     style: Theme.of(context).textTheme.bodySmall),
