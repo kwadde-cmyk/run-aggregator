@@ -42,16 +42,12 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
     _loadHeartRate();
   }
 
-  /// Detect main-effort window by finding where pace settles near the median.
-  /// Returns (startMinute, endMinute) or null if no clear trim.
   (double, double)? _detectMainEffort(List<FlSpot> paceSpots) {
     if (paceSpots.length < 6) return null;
-
     final paces = paceSpots.map((s) => s.y).toList()..sort();
     final median = paces[paces.length ~/ 2];
     if (median <= 0) return null;
-
-    const threshold = 0.18; // within 18% of median = "settled"
+    const threshold = 0.18;
 
     int startIdx = 0;
     for (var i = 0; i < paceSpots.length - 2; i++) {
@@ -428,7 +424,6 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
     }
     var speedSpots = _smooth(rawSpeed, maxJump: 0.4);
 
-    // Warmup/Cooldown trim based on pace settling near median
     final window = _detectMainEffort(speedSpots);
     if (_trimWarmupCooldown && window != null) {
       speedSpots = _applyTrim(speedSpots, window);
@@ -476,20 +471,32 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
             padding: const EdgeInsets.only(bottom: 4),
             child: Text(_hrDebug, style: const TextStyle(fontSize: 12, color: Colors.grey)),
           ),
-        Row(
+        Wrap(
+          spacing: 8,
+          runSpacing: 4,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            Checkbox(
-              value: _trimWarmupCooldown,
-              onChanged: (v) => setState(() => _trimWarmupCooldown = v ?? false),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Checkbox(
+                  value: _trimWarmupCooldown,
+                  onChanged: (v) => setState(() => _trimWarmupCooldown = v ?? false),
+                ),
+                const Text('Warmup/Cooldown ausblenden'),
+              ],
             ),
-            const Text('Warmup/Cooldown ausblenden'),
-            const Spacer(),
-            const Text('min/km'),
-            Switch(
-              value: _showKmh,
-              onChanged: (v) => setState(() => _showKmh = v),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('min/km'),
+                Switch(
+                  value: _showKmh,
+                  onChanged: (v) => setState(() => _showKmh = v),
+                ),
+                const Text('km/h'),
+              ],
             ),
-            const Text('km/h'),
           ],
         ),
         SizedBox(
