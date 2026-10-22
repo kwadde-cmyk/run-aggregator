@@ -66,14 +66,10 @@ class RunkeeperService {
     final cookieHeader = await _cookieHeader();
     if (cookieHeader == null) throw Exception('No Runkeeper cookies');
 
-    final end = DateTime.now();
-    final start = end.subtract(const Duration(days: 10));
-    final startStr = _formatDate(start);
-    final endStr = _formatDate(end);
-
-    // Submit PORTABILITY export (contains GPX with HR)
+    // Submit PORTABILITY export (full data package with GPX)
+    // Form: _eventName=handleExport & exportType=PORTABILITY
     // ignore: avoid_print
-    print('Runkeeper: submitting portability export $startStr → $endStr');
+    print('Runkeeper: submitting portability export');
     final exportRes = await http.post(
       Uri.parse('https://runkeeper.com/exportData'),
       headers: {
@@ -82,9 +78,8 @@ class RunkeeperService {
         'User-Agent': 'Mozilla/5.0',
       },
       body: {
-        '_eventName': 'handlePortabilityExport',
-        'startDate': startStr,
-        'endDate': endStr,
+        '_eventName': 'handleExport',
+        'exportType': 'PORTABILITY',
       },
     );
 
@@ -92,21 +87,38 @@ class RunkeeperService {
       throw Exception('Export submit failed: ${exportRes.statusCode}');
     }
 
-    // Poll for the newest Download Now link
+    // Poll for the newest "Download Package" link
     String? zipUrl;
-    for (var i = 0; i < 24; i++) {
+    for (var i = 0; i < 36; i++) {
       await Future.delayed(const Duration(seconds: 5));
       final page = await http.get(
         Uri.parse('https://runkeeper.com/exportData'),
         headers: {'Cookie': cookieHeader, 'User-Agent': 'Mozilla/5.0'},
       );
-      final match = RegExp(
-        r'href="(https://s3\.amazonaws\.com/hrmfile\.runkeeper\.com/export/[^"]+\.zip)"',
+
+      // Look for "Download Package" links first (portability)
+      final packageMatch = RegExp(
+        r'href="(https://s3\.amazonaws\.com/hrmfile\.runkeeper\.com/export/[^"]+\.zip)"[^>]*>Download Package',
       ).firstMatch(page.body);
-      if (match != null) {
-        zipUrl = match.group(1);
+      if (packageMatch != null) {
+        zipUrl = packageMatch.group(1);
+        // ignore: avoid_print
+        print('Runkeeper: found Download Package link');
         break;
       }
+
+      // Fallback: any newest S3 zip (in case the label differs)
+      final anyMatch = RegExp(
+        r'href="(https://s3\.amazonaws\.com/hrmfile\.runkeeper\.com/export/[^"]+\.zip)"',
+      ).firstMatch(page.body);
+      if (anyMatch != null && i > 2) {
+        zipUrl = anyMatch.group(1);
+        // ignore: avoid_print
+        print('Runkeeper: using first available S3 link');
+        break;
+      }
+      // ignore: avoid_print
+      print('Runkeeper: waiting for package link... (${(i + 1) * 5}s)');
     }
 
     if (zipUrl == null) throw Exception('No download link appeared');
@@ -139,7 +151,7 @@ class RunkeeperService {
 
     // ignore: avoid_print
     print('Runkeeper: ZIP contains ${archive.length} entries:');
-    for (final f in archive.take(30)) {
+    for (final f in archive.take(40)) {
       // ignore: avoid_print
       print('  ${f.isFile ? "FILE" : "DIR "} ${f.name} (${f.size} bytes)');
     }
