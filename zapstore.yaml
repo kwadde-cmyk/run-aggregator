@@ -1,7 +1,4 @@
 # ZAPstore configuration
 repository: https://github.com/kwadde-cmyk/run-aggregator
 
-# Use local APK from the build
-release_source: build/app/outputs/flutter-apk/
-
 summary: Aggregate running data from Google Health and Runkeeper with splits, filters, charts and weather.
