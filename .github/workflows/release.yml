@@ -61,7 +61,7 @@ jobs:
 
       - name: Install zsp
         run: |
-          curl -L https://github.com/zapstore/zsp/releases/latest/download/zsp-linux-amd64 -o zsp
+          curl -L https://github.com/zapstore/zsp/releases/download/v0.4.17/zsp-0.4.17-linux-amd64 -o zsp
           chmod +x zsp
           sudo mv zsp /usr/local/bin/
 
