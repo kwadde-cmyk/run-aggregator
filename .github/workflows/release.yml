@@ -69,7 +69,7 @@ jobs:
         env:
           SIGN_WITH: ${{ secrets.SIGN_WITH }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: zsp publish -y zapstore.yaml
+        run: zsp publish -quiet zapstore.yaml
 
       - name: Upload APKs to GitHub Release
         if: github.event_name == 'release'
