@@ -79,8 +79,45 @@ jobs:
           chmod +x zsp
           sudo mv zsp /usr/local/bin/
 
+      - name: Setup persistent bunker client key
+        env:
+          SIGN_WITH: ${{ secrets.SIGN_WITH }}
+          ZSP_BUNKER_CLIENT_KEY: ${{ secrets.ZSP_BUNKER_CLIENT_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$ZSP_BUNKER_CLIENT_KEY" ]; then
+            echo "ERROR: ZSP_BUNKER_CLIENT_KEY secret is not set"
+            exit 1
+          fi
+          if [ ${#ZSP_BUNKER_CLIENT_KEY} -ne 64 ]; then
+            echo "ERROR: ZSP_BUNKER_CLIENT_KEY must be 64 hex chars (openssl rand -hex 32)"
+            exit 1
+          fi
+          # Extract bunker pubkey from SIGN_WITH (bunker://<pubkey>?...)
+          BUNKER_PUBKEY=$(echo "$SIGN_WITH" | sed -n 's|^bunker://\([^?]*\).*|\1|p')
+          if [ -z "$BUNKER_PUBKEY" ]; then
+            echo "ERROR: Could not extract pubkey from SIGN_WITH bunker URL"
+            exit 1
+          fi
+          echo "Using bunker pubkey: $BUNKER_PUBKEY"
+          KEY_DIR="$HOME/.config/zsp/bunker-keys"
+          mkdir -p "$KEY_DIR"
+          chmod 700 "$KEY_DIR"
+          KEY_FILE="$KEY_DIR/${BUNKER_PUBKEY}.key"
+          printf '%s\n' "$ZSP_BUNKER_CLIENT_KEY" > "$KEY_FILE"
+          chmod 600 "$KEY_FILE"
+          echo "Wrote persistent client key to $KEY_FILE"
+          ls -la "$KEY_FILE"
+
       - name: Publish to ZAPstore
         env:
           SIGN_WITH: ${{ secrets.SIGN_WITH }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: zsp publish -quiet zapstore.yaml
+        run: |
+          set -euo pipefail
+          echo "Starting zsp publish (timeout 5min)..."
+          timeout 300 zsp publish zapstore.yaml || {
+            echo "zsp publish failed or timed out"
+            exit 1
+          }
+          echo "zsp publish finished successfully"
