@@ -3,14 +3,15 @@
 // For now use the Web client you created.
 
 class AuthConfig {
-  static const String googleHealthClientId =
-      '24711413447-q53918n750ps3b8klk3lrhe0v7ddfqpm.apps.googleusercontent.com';
+            static const String googleHealthClientId =
+              '24711413447-190qjcrg3gc4cl8cs3njb5uuqiibhl3b.apps.googleusercontent.com';
 
-  // TODO: Set this locally, never commit the real value
-  static const String googleHealthClientSecret = 'YOUR_CLIENT_SECRET_HERE';
+            static const String googleHealthRedirectUri =
+              'com.googleusercontent.apps.24711413447-190qjcrg3gc4cl8cs3njb5uuqiibhl3b:/oauthredirect';
+  
+         // TODO: Set this locally, never commit the real value
+           static const String googleHealthClientSecret = '';
 
-  static const String googleHealthRedirectUri =
-      'de.kwadde.runaggregator:/oauthredirect'; // Custom scheme for Android
 
   static const List<String> googleHealthScopes = [
     'openid',
