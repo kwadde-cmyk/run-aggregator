@@ -591,19 +591,16 @@ class _CompareScreenState extends State<CompareScreen> {
                       ),
                     ],
                     const SizedBox(width: 12),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Text('min/km'),
-                        Switch(
-                          value: _showKmh,
-                          onChanged: (v) => setState(() {
-                          _showKmh = v;
-                          _savePrefs();
-                        }),
-                        ),
-                        const Text('km/h'),
+                    SegmentedButton<bool>(
+                      segments: const [
+                        ButtonSegment(value: false, label: Text('min/km')),
+                        ButtonSegment(value: true, label: Text('km/h')),
                       ],
+                      selected: {_showKmh},
+                      onSelectionChanged: (s) => setState(() {
+                        _showKmh = s.first;
+                        _savePrefs();
+                      }),
                     ),
                   ],
                 ),
