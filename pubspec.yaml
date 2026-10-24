@@ -1,7 +1,7 @@
 name: run_aggregator
 description: Aggregate and analyze running data from multiple platforms with raw metrics, splits, filters, and weather correlations.
 publish_to: 'none'
-version: 1.0.3+3
+version: 1.0.4+4
 
 environment:
   sdk: '>=3.5.0 <4.0.0'
