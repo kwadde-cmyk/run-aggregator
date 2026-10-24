@@ -21,7 +21,11 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
   String _debugInfo = '';
   double _splitDistanceKm = 1.0;
   bool _showKmh = false;
-  bool _trimWarmupCooldown = false;
+  bool _trimAuto = false;
+  bool _trimManual = false;
+  bool _trimByKm = false;
+  final _trimStartCtrl = TextEditingController(text: '0');
+  final _trimEndCtrl = TextEditingController(text: '0');
 
   List<LatLng> _routePoints = [];
   bool _loadingRoute = true;
@@ -40,6 +44,13 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
     _calculateSplits();
     _loadRoute();
     _loadHeartRate();
+  }
+
+  @override
+  void dispose() {
+    _trimStartCtrl.dispose();
+    _trimEndCtrl.dispose();
+    super.dispose();
   }
 
   (double, double)? _detectMainEffort(List<FlSpot> paceSpots) {
@@ -73,10 +84,39 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
     return (paceSpots[startIdx].x, paceSpots[endIdx].x);
   }
 
-  List<FlSpot> _applyTrim(List<FlSpot> spots, (double, double)? window) {
-    if (window == null || !_trimWarmupCooldown) return spots;
+  List<FlSpot> _applyWindow(List<FlSpot> spots, (double, double)? window) {
+    if (window == null) return spots;
     final (s, e) = window;
     return spots.where((sp) => sp.x >= s && sp.x <= e).toList();
+  }
+
+  (double, double)? _manualWindow(List<FlSpot> spots, List<double> cumKm) {
+    final startVal = double.tryParse(_trimStartCtrl.text.replaceAll(',', '.')) ?? 0;
+    final endVal = double.tryParse(_trimEndCtrl.text.replaceAll(',', '.')) ?? 0;
+    if (startVal <= 0 && endVal <= 0) return null;
+    if (spots.isEmpty) return null;
+
+    if (!_trimByKm) {
+      final maxT = spots.last.x;
+      final s = startVal;
+      final e = maxT - endVal;
+      if (e <= s) return null;
+      return (s, e);
+    }
+
+    if (cumKm.isEmpty || cumKm.length != spots.length) return null;
+    final totalKm = cumKm.last;
+    final startKm = startVal;
+    final endKm = totalKm - endVal;
+    if (endKm <= startKm) return null;
+
+    double? startT, endT;
+    for (var i = 0; i < spots.length; i++) {
+      if (startT == null && cumKm[i] >= startKm) startT = spots[i].x;
+      if (cumKm[i] <= endKm) endT = spots[i].x;
+    }
+    if (startT == null || endT == null || endT <= startT) return null;
+    return (startT, endT);
   }
 
   Future<void> _loadHeartRate() async {
@@ -424,10 +464,28 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
     }
     var speedSpots = _smooth(rawSpeed, maxJump: 0.4);
 
-    final window = _detectMainEffort(speedSpots);
-    if (_trimWarmupCooldown && window != null) {
-      speedSpots = _applyTrim(speedSpots, window);
-      hrSpots = _applyTrim(hrSpots, window);
+    final cumKm = <double>[];
+    double running = 0;
+    for (final p in _distancePoints) {
+      final dist = p['distance'] as Map<String, dynamic>? ?? {};
+      final mmRaw = dist['millimeters'];
+      final mm = mmRaw is num ? mmRaw.toDouble() : double.tryParse(mmRaw?.toString() ?? '0') ?? 0;
+      if (mm <= 0) continue;
+      running += mm / 1000000.0;
+      cumKm.add(running);
+    }
+    while (cumKm.length > speedSpots.length) cumKm.removeAt(0);
+    while (cumKm.length < speedSpots.length) cumKm.insert(0, 0);
+
+    (double, double)? window;
+    if (_trimAuto) {
+      window = _detectMainEffort(speedSpots);
+    } else if (_trimManual) {
+      window = _manualWindow(speedSpots, cumKm);
+    }
+    if (window != null) {
+      speedSpots = _applyWindow(speedSpots, window);
+      hrSpots = _applyWindow(hrSpots, window);
     }
 
     if (hrSpots.isEmpty && speedSpots.isEmpty) return const SizedBox.shrink();
@@ -480,12 +538,64 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Checkbox(
-                  value: _trimWarmupCooldown,
-                  onChanged: (v) => setState(() => _trimWarmupCooldown = v ?? false),
+                  value: _trimAuto,
+                  onChanged: (v) => setState(() {
+                    _trimAuto = v ?? false;
+                    if (_trimAuto) _trimManual = false;
+                  }),
                 ),
-                const Text('Warmup/Cooldown ausblenden'),
+                const Text('Auto'),
               ],
             ),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Checkbox(
+                  value: _trimManual,
+                  onChanged: (v) => setState(() {
+                    _trimManual = v ?? false;
+                    if (_trimManual) _trimAuto = false;
+                  }),
+                ),
+                const Text('Manuell'),
+              ],
+            ),
+            if (_trimManual) ...[
+              SegmentedButton<bool>(
+                segments: const [
+                  ButtonSegment(value: false, label: Text('Zeit')),
+                  ButtonSegment(value: true, label: Text('km')),
+                ],
+                selected: {_trimByKm},
+                onSelectionChanged: (s) => setState(() => _trimByKm = s.first),
+              ),
+              SizedBox(
+                width: 70,
+                child: TextField(
+                  controller: _trimStartCtrl,
+                  decoration: InputDecoration(
+                    labelText: 'Start',
+                    isDense: true,
+                    suffixText: _trimByKm ? 'km' : 'min',
+                  ),
+                  keyboardType: TextInputType.number,
+                  onChanged: (_) => setState(() {}),
+                ),
+              ),
+              SizedBox(
+                width: 70,
+                child: TextField(
+                  controller: _trimEndCtrl,
+                  decoration: InputDecoration(
+                    labelText: 'Ende',
+                    isDense: true,
+                    suffixText: _trimByKm ? 'km' : 'min',
+                  ),
+                  keyboardType: TextInputType.number,
+                  onChanged: (_) => setState(() {}),
+                ),
+              ),
+            ],
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
