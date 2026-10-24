@@ -419,84 +419,98 @@ class _CompareScreenState extends State<CompareScreen> {
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: DataTable(
-                    columns: const [
-                      DataColumn(label: Text('Datum')),
-                      DataColumn(label: Text('Distanz')),
-                      DataColumn(label: Text('Dauer')),
-                      DataColumn(label: Text('Ø HF')),
-                      DataColumn(label: Text('Ø Pace')),
-                      DataColumn(label: Text('Temp')),
-                      DataColumn(label: Text('Kalorien')),
-                    ],
-                    rows: widget.exercises.asMap().entries.map((entry) {
-                      final idx = entry.key;
-                      final item = entry.value;
-                      final exercise = item['exercise'] as Map<String, dynamic>? ?? {};
-                      final interval = exercise['interval'] as Map<String, dynamic>? ?? {};
-                      final metrics = exercise['metricsSummary'] as Map<String, dynamic>? ?? {};
+                Column(
+                  children: widget.exercises.asMap().entries.map((entry) {
+                    final idx = entry.key;
+                    final item = entry.value;
+                    final exercise = item['exercise'] as Map<String, dynamic>? ?? {};
+                    final interval = exercise['interval'] as Map<String, dynamic>? ?? {};
+                    final metrics = exercise['metricsSummary'] as Map<String, dynamic>? ?? {};
 
-                      final start = interval['startTime'] as String? ?? '';
-                      final startDt = DateTime.tryParse(start);
-                      final dateStr = startDt != null
-                          ? '${startDt.day}.${startDt.month}. ${startDt.hour}:${startDt.minute.toString().padLeft(2, '0')}'
-                          : start;
+                    final start = interval['startTime'] as String? ?? '';
+                    final startDt = DateTime.tryParse(start);
+                    final dateStr = startDt != null
+                        ? '${startDt.day}.${startDt.month}. ${startDt.hour}:${startDt.minute.toString().padLeft(2, '0')}'
+                        : start;
 
-                      final adj = _adjustedMetrics(idx);
+                    final adj = _adjustedMetrics(idx);
 
-                      String distKm;
-                      String duration;
-                      String hrStr;
-                      String paceStr;
+                    String distKm;
+                    String duration;
+                    String hrStr;
+                    String paceStr;
 
-                      if (adj != null) {
-                        distKm = adj.distKm != null ? adj.distKm!.toStringAsFixed(2) : '-';
-                        duration = adj.durationMin != null
-                            ? _formatDuration('${(adj.durationMin! * 60).round()}s')
-                            : '-';
-                        hrStr = adj.avgHr != null ? adj.avgHr!.toStringAsFixed(0) : '-';
-                        paceStr = _formatPace(adj.avgPace);
-                      } else {
-                        final distMm = _toDouble(metrics['distanceMillimeters']);
-                        distKm = distMm != null ? (distMm / 1000000).toStringAsFixed(2) : '-';
-                        duration = _formatDuration(exercise['activeDuration'] as String?);
-                        final avgHr = _toDouble(metrics['averageHeartRateBeatsPerMinute']);
-                        hrStr = avgHr != null ? avgHr.toStringAsFixed(0) : '-';
-                        final pace = _toDouble(metrics['averagePaceSecondsPerMeter']);
-                        paceStr = _formatPace(pace != null ? pace * 1000 / 60 : null);
-                      }
+                    if (adj != null) {
+                      distKm = adj.distKm != null ? adj.distKm!.toStringAsFixed(2) : '-';
+                      duration = adj.durationMin != null
+                          ? _formatDuration('${(adj.durationMin! * 60).round()}s')
+                          : '-';
+                      hrStr = adj.avgHr != null ? adj.avgHr!.toStringAsFixed(0) : '-';
+                      paceStr = _formatPace(adj.avgPace);
+                    } else {
+                      final distMm = _toDouble(metrics['distanceMillimeters']);
+                      distKm = distMm != null ? (distMm / 1000000).toStringAsFixed(2) : '-';
+                      duration = _formatDuration(exercise['activeDuration'] as String?);
+                      final avgHr = _toDouble(metrics['averageHeartRateBeatsPerMinute']);
+                      hrStr = avgHr != null ? avgHr.toStringAsFixed(0) : '-';
+                      final pace = _toDouble(metrics['averagePaceSecondsPerMeter']);
+                      paceStr = _formatPace(pace != null ? pace * 1000 / 60 : null);
+                    }
 
-                      final cal = _toDouble(metrics['caloriesKcal']);
-                      final calStr = cal != null ? cal.toStringAsFixed(0) : '-';
+                    final cal = _toDouble(metrics['caloriesKcal']);
+                    final calStr = cal != null ? cal.toStringAsFixed(0) : '-';
+                    final temp = idx < _temps.length ? _temps[idx] : null;
+                    final tempStr = temp != null ? '${temp.toStringAsFixed(0)}°C' : '-';
+                    final color = _colors[idx % _colors.length];
 
-                      final temp = idx < _temps.length ? _temps[idx] : null;
-                      final tempStr = temp != null ? '${temp.toStringAsFixed(0)}°C' : '-';
-
-                      return DataRow(
-                        cells: [
-                          DataCell(
-                            Text(dateStr, style: const TextStyle(decoration: TextDecoration.underline)),
-                            onTap: () {
-                              Navigator.of(context).push(
-                                MaterialPageRoute(builder: (_) => ExerciseDetailScreen(exercisePoint: item)),
-                              );
-                            },
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: Material(
+                        color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(0.5),
+                        borderRadius: BorderRadius.circular(16),
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(16),
+                          onTap: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(builder: (_) => ExerciseDetailScreen(exercisePoint: item)),
+                            );
+                          },
+                          child: Padding(
+                            padding: const EdgeInsets.all(14),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 6,
+                                  height: 48,
+                                  decoration: BoxDecoration(
+                                    color: color,
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(dateStr, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
+                                      const SizedBox(height: 4),
+                                      Text('$distKm km  ·  $duration  ·  $paceStr /km', style: Theme.of(context).textTheme.bodyMedium),
+                                      const SizedBox(height: 2),
+                                      Text('$hrStr bpm  ·  $tempStr  ·  $calStr kcal', style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                                    ],
+                                  ),
+                                ),
+                                const Icon(Icons.chevron_right, size: 20),
+                              ],
+                            ),
                           ),
-                          DataCell(Text('$distKm km')),
-                          DataCell(Text(duration)),
-                          DataCell(Text('$hrStr bpm')),
-                          DataCell(Text('$paceStr min/km')),
-                          DataCell(Text(tempStr)),
-                          DataCell(Text(calStr)),
-                        ],
-                      );
-                    }).toList(),
-                  ),
-                ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                )),
                 const SizedBox(height: 16),
-                const Text('Warmup / Cooldown', style: TextStyle(fontWeight: FontWeight.w600)),
+                Text('Warmup / Cooldown', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
                 const SizedBox(height: 4),
                 Wrap(
                   spacing: 8,
@@ -594,11 +608,11 @@ class _CompareScreenState extends State<CompareScreen> {
                   ],
                 ),
                 const SizedBox(height: 16),
-                Text(_showKmh ? 'Geschwindigkeit' : 'Pace-Verlauf', style: Theme.of(context).textTheme.titleMedium),
+                Text(_showKmh ? 'Geschwindigkeit' : 'Pace-Verlauf', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600)),
                 const SizedBox(height: 8),
                 _buildOverlayChart(_displayPace, _showKmh ? 'km/h' : 'min/km'),
                 const SizedBox(height: 24),
-                Text('HF-Verlauf', style: Theme.of(context).textTheme.titleMedium),
+                Text('HF-Verlauf', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600)),
                 const SizedBox(height: 8),
                 _buildOverlayChart(_displayHr, 'bpm', isHr: true),
                 const SizedBox(height: 16),
