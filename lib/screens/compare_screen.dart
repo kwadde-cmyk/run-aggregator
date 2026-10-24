@@ -508,7 +508,7 @@ class _CompareScreenState extends State<CompareScreen> {
                       ),
                     );
                   }).toList(),
-                )),
+                ),
                 const SizedBox(height: 16),
                 Text('Warmup / Cooldown', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
                 const SizedBox(height: 4),
