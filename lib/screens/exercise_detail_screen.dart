@@ -15,6 +15,23 @@ class ExerciseDetailScreen extends StatefulWidget {
 }
 
 class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
+
+  String _formatPace(double? minPerKm) {
+    if (minPerKm == null || minPerKm <= 0) return '-';
+    final totalSec = (minPerKm * 60).round();
+    final m = totalSec ~/ 60;
+    final s = totalSec % 60;
+    return '$m:${s.toString().padLeft(2, '0')}';
+  }
+
+  String _formatDuration(double? sec) {
+    if (sec == null || sec <= 0) return '-';
+    final total = sec.round();
+    final m = total ~/ 60;
+    final s = total % 60;
+    return '$m:${s.toString().padLeft(2, '0')}';
+  }
+
   List<Map<String, dynamic>> _splits = [];
   bool _loadingSplits = true;
   String? _splitError;
@@ -755,12 +772,13 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
           if (_debugInfo.isNotEmpty)
             Text(_debugInfo, style: const TextStyle(fontSize: 12, color: Colors.grey)),
           ..._splits.map((s) {
-            final pace = (s['paceMinKm'] as num?)?.toStringAsFixed(2) ?? '-';
+            final pace = _formatPace((s['paceMinKm'] as num?)?.toDouble());
             final kmh = (s['kmh'] as num?)?.toStringAsFixed(1) ?? '-';
-            final dur = (s['durationSec'] as num?)?.toStringAsFixed(0) ?? '-';
+            final dur = _formatDuration((s['durationSec'] as num?)?.toDouble());
+            final dist = (s['distanceKm'] as num?)?.toStringAsFixed(1) ?? '-';
             return ListTile(
-              title: Text('Split ${s['index']}'),
-              subtitle: Text('$pace min/km · $kmh km/h · $dur s'),
+              title: Text('Split ${s['index']}  ($dist km)'),
+              subtitle: Text('$pace min/km · $kmh km/h · $dur'),
             );
           }),
         ],
