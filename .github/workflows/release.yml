@@ -116,11 +116,11 @@ jobs:
         run: |
           set -euo pipefail
           echo "Starting zsp publish (timeout 5min)..."
-          # Publish the freshly built local APK to avoid fetching a stale GitHub release
+          # Publish the freshly built local APK
           APK=$(ls -1 build/app/outputs/flutter-apk/*arm64-v8a-release.apk | head -1)
           echo "Publishing local APK: $APK"
-          # --quiet can short-circuit without publishing; pipe yes to answer the confirmation prompt
-          yes | timeout 300 zsp publish --overwrite-release --skip-certificate-linking --verbose "$APK" -r https://github.com/kwadde-cmyk/run-aggregator || {
+          # Allocate a pseudo-TTY so zsp confirmation works in CI, and capture JSON result
+          timeout 300 script -qefc "zsp publish --overwrite-release --skip-certificate-linking --json --quiet \"$APK\" -r https://github.com/kwadde-cmyk/run-aggregator" /dev/null || {
             echo "zsp publish failed or timed out"
             exit 1
           }
