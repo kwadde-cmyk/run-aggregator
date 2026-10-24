@@ -311,6 +311,54 @@ class _CompareScreenState extends State<CompareScreen> {
     });
   }
 
+
+  /// Returns adjusted metrics for the given series index when trim is active.
+  /// Falls back to null values when no window applies.
+  ({double? distKm, double? durationMin, double? avgPace, double? avgHr})? _adjustedMetrics(int i) {
+    if (!_trimAuto && !_trimManual) return null;
+    if (i >= _paceSeries.length) return null;
+
+    final window = _trimAuto
+        ? _detectMainEffort(_paceSeries[i])
+        : _manualWindow(i);
+    if (window == null) return null;
+
+    final (startMin, endMin) = window;
+    final durationMin = endMin - startMin;
+    if (durationMin <= 0) return null;
+
+    // Distance from cumulative km
+    double? distKm;
+    final kms = i < _cumKm.length ? _cumKm[i] : <double>[];
+    final spots = _paceSeries[i];
+    if (kms.length == spots.length && spots.isNotEmpty) {
+      double startKm = 0, endKm = kms.last;
+      for (var j = 0; j < spots.length; j++) {
+        if (spots[j].x >= startMin && startKm == 0) startKm = kms[j];
+        if (spots[j].x <= endMin) endKm = kms[j];
+      }
+      distKm = (endKm - startKm).clamp(0, double.infinity);
+    }
+
+    // Average pace (min/km) from spots in window
+    final paceInWindow = spots.where((s) => s.x >= startMin && s.x <= endMin).map((s) => s.y).toList();
+    double? avgPace;
+    if (paceInWindow.isNotEmpty) {
+      avgPace = paceInWindow.reduce((a, b) => a + b) / paceInWindow.length;
+    }
+
+    // Average HR
+    double? avgHr;
+    if (i < _hrSeries.length) {
+      final hrInWindow = _hrSeries[i].where((s) => s.x >= startMin && s.x <= endMin).map((s) => s.y).toList();
+      if (hrInWindow.isNotEmpty) {
+        avgHr = hrInWindow.reduce((a, b) => a + b) / hrInWindow.length;
+      }
+    }
+
+    return (distKm: distKm, durationMin: durationMin, avgPace: avgPace, avgHr: avgHr);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -345,16 +393,29 @@ class _CompareScreenState extends State<CompareScreen> {
                           ? '${startDt.day}.${startDt.month}. ${startDt.hour}:${startDt.minute.toString().padLeft(2, '0')}'
                           : start;
 
-                      final distMm = _toDouble(metrics['distanceMillimeters']);
-                      final distKm = distMm != null ? (distMm / 1000000).toStringAsFixed(2) : '-';
+                      final adj = _adjustedMetrics(idx);
 
-                      final duration = exercise['activeDuration'] as String? ?? '-';
+                      String distKm;
+                      String duration;
+                      String hrStr;
+                      String paceStr;
 
-                      final avgHr = _toDouble(metrics['averageHeartRateBeatsPerMinute']);
-                      final hrStr = avgHr != null ? avgHr.toStringAsFixed(0) : '-';
-
-                      final pace = _toDouble(metrics['averagePaceSecondsPerMeter']);
-                      final paceStr = pace != null ? (pace * 1000 / 60).toStringAsFixed(2) : '-';
+                      if (adj != null) {
+                        distKm = adj.distKm != null ? adj.distKm!.toStringAsFixed(2) : '-';
+                        duration = adj.durationMin != null
+                            ? '${adj.durationMin!.toStringAsFixed(1)} min'
+                            : '-';
+                        hrStr = adj.avgHr != null ? adj.avgHr!.toStringAsFixed(0) : '-';
+                        paceStr = adj.avgPace != null ? adj.avgPace!.toStringAsFixed(2) : '-';
+                      } else {
+                        final distMm = _toDouble(metrics['distanceMillimeters']);
+                        distKm = distMm != null ? (distMm / 1000000).toStringAsFixed(2) : '-';
+                        duration = exercise['activeDuration'] as String? ?? '-';
+                        final avgHr = _toDouble(metrics['averageHeartRateBeatsPerMinute']);
+                        hrStr = avgHr != null ? avgHr.toStringAsFixed(0) : '-';
+                        final pace = _toDouble(metrics['averagePaceSecondsPerMeter']);
+                        paceStr = pace != null ? (pace * 1000 / 60).toStringAsFixed(2) : '-';
+                      }
 
                       final cal = _toDouble(metrics['caloriesKcal']);
                       final calStr = cal != null ? cal.toStringAsFixed(0) : '-';
