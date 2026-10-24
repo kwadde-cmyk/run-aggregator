@@ -116,7 +116,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "Starting zsp publish (timeout 5min)..."
-          timeout 300 zsp publish zapstore.yaml || {
+          timeout 300 zsp publish --skip-certificate-linking zapstore.yaml || {
             echo "zsp publish failed or timed out"
             exit 1
           }
