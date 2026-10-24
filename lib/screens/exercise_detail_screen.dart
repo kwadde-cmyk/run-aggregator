@@ -254,14 +254,63 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
         return;
       }
 
-      final distancePoints = await GoogleHealthService.getDistancePoints(
+      var distancePoints = await GoogleHealthService.getDistancePoints(
         startTime: start,
         endTime: end,
       );
 
+      // Apply warmup/cooldown filter to points used for splits
+      if (_trimAuto || _trimManual) {
+        final exerciseStart = DateTime.tryParse(start);
+        if (exerciseStart != null && distancePoints.isNotEmpty) {
+          // Build temporary pace spots to detect window
+          final tempSpots = <FlSpot>[];
+          final tempCum = <double>[];
+          double runKm = 0;
+          for (final p in distancePoints) {
+            final dist = p['distance'] as Map<String, dynamic>? ?? {};
+            final intv = dist['interval'] as Map<String, dynamic>? ?? {};
+            final tStart = DateTime.tryParse(intv['startTime']?.toString() ?? '');
+            final tEnd = DateTime.tryParse(intv['endTime']?.toString() ?? '');
+            final mmRaw = dist['millimeters'];
+            final mm = mmRaw is num ? mmRaw.toDouble() : double.tryParse(mmRaw?.toString() ?? '0') ?? 0;
+            if (tStart == null || tEnd == null || mm <= 0) continue;
+            final sec = tEnd.difference(tStart).inSeconds;
+            if (sec <= 0) continue;
+            final km = mm / 1000000.0;
+            runKm += km;
+            final pace = (sec / 60.0) / km;
+            final minutes = tStart.difference(exerciseStart).inSeconds / 60.0;
+            if (minutes >= 0 && pace > 0 && pace < 25) {
+              tempSpots.add(FlSpot(minutes, pace));
+              tempCum.add(runKm);
+            }
+          }
+
+          (double, double)? window;
+          if (_trimAuto) {
+            window = _detectMainEffort(tempSpots);
+          } else if (_trimManual) {
+            window = _manualWindow(tempSpots, tempCum);
+          }
+
+          if (window != null) {
+            final (sMin, eMin) = window;
+            distancePoints = distancePoints.where((p) {
+              final dist = p['distance'] as Map<String, dynamic>? ?? {};
+              final intv = dist['interval'] as Map<String, dynamic>? ?? {};
+              final tStart = DateTime.tryParse(intv['startTime']?.toString() ?? '');
+              if (tStart == null) return false;
+              final minutes = tStart.difference(exerciseStart).inSeconds / 60.0;
+              return minutes >= sMin && minutes <= eMin;
+            }).toList();
+          }
+        }
+      }
+
       setState(() {
         _distancePoints = distancePoints;
-        _debugInfo = 'Distanzpunkte gefunden: ${distancePoints.length}';
+        _debugInfo = 'Distanzpunkte für Splits: ${distancePoints.length}';
       });
 
       final calculated = _computeFixedDistanceSplits(distancePoints, _splitDistanceKm);
@@ -556,10 +605,13 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
               children: [
                 Checkbox(
                   value: _trimAuto,
-                  onChanged: (v) => setState(() {
-                    _trimAuto = v ?? false;
-                    if (_trimAuto) _trimManual = false;
-                  }),
+                  onChanged: (v) {
+                    setState(() {
+                      _trimAuto = v ?? false;
+                      if (_trimAuto) _trimManual = false;
+                    });
+                    _calculateSplits();
+                  },
                 ),
                 const Text('Auto'),
               ],
@@ -569,10 +621,13 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
               children: [
                 Checkbox(
                   value: _trimManual,
-                  onChanged: (v) => setState(() {
-                    _trimManual = v ?? false;
-                    if (_trimManual) _trimAuto = false;
-                  }),
+                  onChanged: (v) {
+                    setState(() {
+                      _trimManual = v ?? false;
+                      if (_trimManual) _trimAuto = false;
+                    });
+                    _calculateSplits();
+                  },
                 ),
                 const Text('Manuell'),
               ],
@@ -596,7 +651,10 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
                     suffixText: _trimByKm ? 'km' : 'min',
                   ),
                   keyboardType: TextInputType.number,
-                  onChanged: (_) => setState(() {}),
+                  onChanged: (_) {
+                    setState(() {});
+                    _calculateSplits();
+                  },
                 ),
               ),
               SizedBox(
@@ -609,7 +667,10 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
                     suffixText: _trimByKm ? 'km' : 'min',
                   ),
                   keyboardType: TextInputType.number,
-                  onChanged: (_) => setState(() {}),
+                  onChanged: (_) {
+                    setState(() {});
+                    _calculateSplits();
+                  },
                 ),
               ),
             ],
