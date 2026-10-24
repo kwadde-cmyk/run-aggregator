@@ -1,5 +1,6 @@
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/google_health_service.dart';
 import '../services/weather_service.dart';
 import 'exercise_detail_screen.dart';
@@ -46,6 +47,25 @@ class _CompareScreenState extends State<CompareScreen> {
     final totalSec = (minPerKm * 60).round();
     final m = totalSec ~/ 60;
     final s = totalSec % 60;
+    return '$m:${s.toString().padLeft(2, '0')}';
+  }
+
+  String _formatDuration(String? raw) {
+    if (raw == null || raw.isEmpty || raw == '-') return '-';
+    final cleaned = raw.toLowerCase().trim();
+    double? totalSec;
+    if (cleaned.endsWith('s') && !cleaned.contains('min')) {
+      totalSec = double.tryParse(cleaned.replaceAll('s', '').trim());
+    } else if (cleaned.contains('min')) {
+      final mins = double.tryParse(cleaned.replaceAll('min', '').trim());
+      if (mins != null) totalSec = mins * 60;
+    } else {
+      totalSec = double.tryParse(cleaned);
+    }
+    if (totalSec == null || totalSec <= 0) return raw;
+    final secs = totalSec.round();
+    final m = secs ~/ 60;
+    final s = secs % 60;
     return '$m:${s.toString().padLeft(2, '0')}';
   }
 
@@ -129,7 +149,29 @@ class _CompareScreenState extends State<CompareScreen> {
   @override
   void initState() {
     super.initState();
-    _load();
+    _loadPrefs().then((_) => _load());
+  }
+
+  Future<void> _loadPrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _trimAuto = prefs.getBool('trim_auto') ?? false;
+      _trimManual = prefs.getBool('trim_manual') ?? false;
+      _trimByKm = prefs.getBool('trim_by_km') ?? false;
+      _showKmh = prefs.getBool('show_kmh') ?? false;
+      _trimStartCtrl.text = prefs.getString('trim_start') ?? '0';
+      _trimEndCtrl.text = prefs.getString('trim_end') ?? '0';
+    });
+  }
+
+  Future<void> _savePrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('trim_auto', _trimAuto);
+    await prefs.setBool('trim_manual', _trimManual);
+    await prefs.setBool('trim_by_km', _trimByKm);
+    await prefs.setBool('show_kmh', _showKmh);
+    await prefs.setString('trim_start', _trimStartCtrl.text);
+    await prefs.setString('trim_end', _trimEndCtrl.text);
   }
 
   @override
@@ -412,14 +454,14 @@ class _CompareScreenState extends State<CompareScreen> {
                       if (adj != null) {
                         distKm = adj.distKm != null ? adj.distKm!.toStringAsFixed(2) : '-';
                         duration = adj.durationMin != null
-                            ? '${adj.durationMin!.toStringAsFixed(1)} min'
+                            ? _formatDuration('${(adj.durationMin! * 60).round()}s')
                             : '-';
                         hrStr = adj.avgHr != null ? adj.avgHr!.toStringAsFixed(0) : '-';
                         paceStr = _formatPace(adj.avgPace);
                       } else {
                         final distMm = _toDouble(metrics['distanceMillimeters']);
                         distKm = distMm != null ? (distMm / 1000000).toStringAsFixed(2) : '-';
-                        duration = exercise['activeDuration'] as String? ?? '-';
+                        duration = _formatDuration(exercise['activeDuration'] as String?);
                         final avgHr = _toDouble(metrics['averageHeartRateBeatsPerMinute']);
                         hrStr = avgHr != null ? avgHr.toStringAsFixed(0) : '-';
                         final pace = _toDouble(metrics['averagePaceSecondsPerMeter']);
@@ -469,6 +511,7 @@ class _CompareScreenState extends State<CompareScreen> {
                           onChanged: (v) => setState(() {
                             _trimAuto = v ?? false;
                             if (_trimAuto) _trimManual = false;
+                            _savePrefs();
                           }),
                         ),
                         const Text('Auto'),
@@ -482,6 +525,7 @@ class _CompareScreenState extends State<CompareScreen> {
                           onChanged: (v) => setState(() {
                             _trimManual = v ?? false;
                             if (_trimManual) _trimAuto = false;
+                            _savePrefs();
                           }),
                         ),
                         const Text('Manuell'),
@@ -494,7 +538,10 @@ class _CompareScreenState extends State<CompareScreen> {
                           ButtonSegment(value: true, label: Text('km')),
                         ],
                         selected: {_trimByKm},
-                        onSelectionChanged: (s) => setState(() => _trimByKm = s.first),
+                        onSelectionChanged: (s) => setState(() {
+                          _trimByKm = s.first;
+                          _savePrefs();
+                        }),
                       ),
                       SizedBox(
                         width: 70,
@@ -506,7 +553,10 @@ class _CompareScreenState extends State<CompareScreen> {
                             suffixText: _trimByKm ? 'km' : 'min',
                           ),
                           keyboardType: TextInputType.number,
-                          onChanged: (_) => setState(() {}),
+                          onChanged: (_) {
+                          setState(() {});
+                          _savePrefs();
+                        },
                         ),
                       ),
                       SizedBox(
@@ -519,7 +569,10 @@ class _CompareScreenState extends State<CompareScreen> {
                             suffixText: _trimByKm ? 'km' : 'min',
                           ),
                           keyboardType: TextInputType.number,
-                          onChanged: (_) => setState(() {}),
+                          onChanged: (_) {
+                          setState(() {});
+                          _savePrefs();
+                        },
                         ),
                       ),
                     ],
@@ -530,7 +583,10 @@ class _CompareScreenState extends State<CompareScreen> {
                         const Text('min/km'),
                         Switch(
                           value: _showKmh,
-                          onChanged: (v) => setState(() => _showKmh = v),
+                          onChanged: (v) => setState(() {
+                          _showKmh = v;
+                          _savePrefs();
+                        }),
                         ),
                         const Text('km/h'),
                       ],
@@ -553,3 +609,4 @@ class _CompareScreenState extends State<CompareScreen> {
     );
   }
 }
+
