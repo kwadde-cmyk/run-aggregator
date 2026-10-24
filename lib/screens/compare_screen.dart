@@ -40,6 +40,15 @@ class _CompareScreenState extends State<CompareScreen> {
     Colors.pink,
   ];
 
+
+  String _formatPace(double? minPerKm) {
+    if (minPerKm == null || minPerKm <= 0) return '-';
+    final totalSec = (minPerKm * 60).round();
+    final m = totalSec ~/ 60;
+    final s = totalSec % 60;
+    return '$m:${s.toString().padLeft(2, '0')}';
+  }
+
   double? _toDouble(dynamic v) {
     if (v is num) return v.toDouble();
     if (v is String) return double.tryParse(v);
@@ -406,7 +415,7 @@ class _CompareScreenState extends State<CompareScreen> {
                             ? '${adj.durationMin!.toStringAsFixed(1)} min'
                             : '-';
                         hrStr = adj.avgHr != null ? adj.avgHr!.toStringAsFixed(0) : '-';
-                        paceStr = adj.avgPace != null ? adj.avgPace!.toStringAsFixed(2) : '-';
+                        paceStr = _formatPace(adj.avgPace);
                       } else {
                         final distMm = _toDouble(metrics['distanceMillimeters']);
                         distKm = distMm != null ? (distMm / 1000000).toStringAsFixed(2) : '-';
@@ -414,7 +423,7 @@ class _CompareScreenState extends State<CompareScreen> {
                         final avgHr = _toDouble(metrics['averageHeartRateBeatsPerMinute']);
                         hrStr = avgHr != null ? avgHr.toStringAsFixed(0) : '-';
                         final pace = _toDouble(metrics['averagePaceSecondsPerMeter']);
-                        paceStr = pace != null ? (pace * 1000 / 60).toStringAsFixed(2) : '-';
+                        paceStr = _formatPace(pace != null ? pace * 1000 / 60 : null);
                       }
 
                       final cal = _toDouble(metrics['caloriesKcal']);
