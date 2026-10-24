@@ -119,7 +119,7 @@ jobs:
           # Publish the freshly built local APK to avoid fetching a stale GitHub release
           APK=$(ls -1 build/app/outputs/flutter-apk/*arm64-v8a-release.apk | head -1)
           echo "Publishing local APK: $APK"
-          timeout 300 zsp publish --overwrite-release --skip-certificate-linking --verbose "$APK" -r https://github.com/kwadde-cmyk/run-aggregator || {
+          timeout 300 zsp publish --overwrite-release --skip-certificate-linking --quiet "$APK" -r https://github.com/kwadde-cmyk/run-aggregator || {
             echo "zsp publish failed or timed out"
             exit 1
           }
