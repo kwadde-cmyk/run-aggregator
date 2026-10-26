@@ -1,4 +1,5 @@
 # ZAPstore configuration
 repository: https://github.com/kwadde-cmyk/run-aggregator
+pubkey: npub1hsrqgwepcd9t3t5q9nm2jjvvz626sk6fjhzyqw3ahfpgrz67034sldsnpz
 
 summary: Aggregate running data from Google Health and Runkeeper with splits, filters, charts and weather.
