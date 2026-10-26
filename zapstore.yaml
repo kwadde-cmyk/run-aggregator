@@ -1,5 +1,22 @@
-# ZAPstore configuration
-repository: https://github.com/kwadde-cmyk/run-aggregator
-pubkey: npub1hsrqgwepcd9t3t5q9nm2jjvvz626sk6fjhzyqw3ahfpgrz67034sldsnpz
-
+# Zapstore catalog for zsp (https://github.com/zapstore/zsp).
+# pubkey must match the key behind SIGN_WITH (the event pubkey, not the
+# bunker URL's remote-signer pubkey). The relay reads this file from the
+# public repo to whitelist that npub. Never put an nsec here.
+name: Run Aggregator
 summary: Aggregate running data from Google Health and Runkeeper with splits, filters, charts and weather.
+description: |
+  Android app to import and compare runs from Google Health and ASICS Runkeeper.
+  Splits, filters, charts and weather for the same routes.
+repository: https://github.com/kwadde-cmyk/run-aggregator
+# Local signed universal APK. CI downloads the GitHub Release asset to this
+# path, then runs `zsp publish zapstore.yaml`. Exact filename, not a glob:
+# this directory can also hold debug or split APKs. Do not pass the .apk as
+# a zsp argument; that ignores this file.
+release_source: ./build/app/outputs/flutter-apk/app-release.apk
+website: https://github.com/kwadde-cmyk/run-aggregator
+pubkey: npub1hsrqgwepcd9t3t5q9nm2jjvvz626sk6fjhzyqw3ahfpgrz67034sldsnpz
+icon: ./android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+tags:
+  - running
+  - fitness
+  - android

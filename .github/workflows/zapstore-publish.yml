@@ -1,0 +1,155 @@
+name: Publish to ZAPstore
+
+# Publishes one existing GitHub Release to ZAPstore.
+# Called by Release, or started on its own to retry a tag without rebuilding.
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Existing GitHub Release tag, e.g. v1.0.5"
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Existing GitHub Release tag, e.g. v1.0.5"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install zsp
+        # v0.4.17 is the release scriptwerk-android publishes with.
+        # `-y` is documented but not implemented; `--quiet` skips prompts.
+        # Do not pass --json: it hides per-event relay results.
+        env:
+          ZSP_VERSION: "0.4.17"
+          ZSP_SHA256: "3f241da6a5dc7a85fe851d3b42b77790b651bd36c7029382a701262bda832d20"
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/zsp" \
+            "https://github.com/zapstore/zsp/releases/download/v${ZSP_VERSION}/zsp-${ZSP_VERSION}-linux-amd64"
+          echo "${ZSP_SHA256}  $RUNNER_TEMP/zsp" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/zsp"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/zsp" --version
+
+      - name: Download APK from GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION_TAG: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          # zapstore.yaml release_source. The publish step does not rewrite it.
+          dest=build/app/outputs/flutter-apk
+          mkdir -p "$dest"
+          ok=0
+          for _ in 1 2 3 4 5 6; do
+            if gh release download "$VERSION_TAG" -p "app-release.apk" -D "$dest" --clobber; then
+              ok=1
+              break
+            fi
+            echo "release $VERSION_TAG not downloadable yet, retrying"
+            sleep 5
+          done
+          apk="$dest/app-release.apk"
+          if [ "$ok" -ne 1 ] || [ ! -f "$apk" ]; then
+            echo "::error::GitHub Release $VERSION_TAG has no app-release.apk. Split APKs are not used; their versionCode is not the pubspec build number."
+            exit 1
+          fi
+          find "$dest" -name '*.apk' ! -name 'app-release.apk' -delete
+          ls -la "$apk"
+          sha256sum "$apk"
+          zsp utils extract-apk "$apk" | tee /tmp/apk.json
+
+      - name: Reject a versionCode that cannot update
+        env:
+          VERSION_TAG: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/verify_zapstore_release.py \
+            --skip-network \
+            --metadata /tmp/apk.json \
+            --tag "$VERSION_TAG" \
+            --zapstore-yaml zapstore.yaml
+
+      - name: Publish to Zapstore
+        timeout-minutes: 15
+        env:
+          SIGN_WITH: ${{ secrets.SIGN_WITH }}
+          ZSP_BUNKER_CLIENT_KEY: ${{ secrets.ZSP_BUNKER_CLIENT_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          [ -f build/app/outputs/flutter-apk/app-release.apk ] || {
+            echo "::error::missing build/app/outputs/flutter-apk/app-release.apk (zapstore.yaml release_source)"
+            exit 1
+          }
+          [ -n "$SIGN_WITH" ] || { echo "::error::missing repo secret SIGN_WITH"; exit 1; }
+          if [[ "$SIGN_WITH" == bunker://* ]]; then
+            # zsp keys NIP-46 permissions by its client key, stored at
+            # $XDG_CONFIG_HOME/zsp/bunker-keys/<bunker pubkey>.key (64 hex chars).
+            # A fresh runner would generate a new key every run, which Amber rejects
+            # ("no permission") once the single-use bunker secret has been consumed.
+            # XDG_CONFIG_HOME is exported in this same step so zsp sees it.
+            [ -n "${ZSP_BUNKER_CLIENT_KEY:-}" ] || { echo "::error::missing repo secret ZSP_BUNKER_CLIENT_KEY (required for bunker:// signing; generate once with: openssl rand -hex 32)"; exit 1; }
+            client_key="$(printf '%s' "$ZSP_BUNKER_CLIENT_KEY" | tr -d '[:space:]' | tr 'A-F' 'a-f')"
+            [[ "$client_key" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::ZSP_BUNKER_CLIENT_KEY must be exactly 64 hex characters"; exit 1; }
+            bunker_pk="${SIGN_WITH#bunker://}"
+            bunker_pk="${bunker_pk%%\?*}"
+            bunker_pk="${bunker_pk%%/*}"
+            [[ "$bunker_pk" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::SIGN_WITH: bunker URL has no valid 64-hex remote-signer pubkey"; exit 1; }
+            export XDG_CONFIG_HOME="$RUNNER_TEMP/cfg"
+            key_dir="$XDG_CONFIG_HOME/zsp/bunker-keys"
+            mkdir -p "$key_dir"
+            chmod 700 "$XDG_CONFIG_HOME/zsp" "$key_dir"
+            ( umask 077; printf '%s\n' "$client_key" > "$key_dir/$bunker_pk.key" )
+            chmod 600 "$key_dir/$bunker_pk.key"
+            unset client_key
+            echo "Using persisted NIP-46 client key for bunker ${bunker_pk:0:8}..."
+          fi
+          # Same invocation as scriptwerk-android. No other flags.
+          # --quiet: no prompts. --verbose: per-event relay lines.
+          zsp_log="$RUNNER_TEMP/zsp-publish.log"
+          set +e
+          timeout 600 "$RUNNER_TEMP/zsp" publish --quiet --verbose zapstore.yaml 2>&1 | tee "$zsp_log"
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$rc" -eq 124 ]; then
+            if grep -q 'relay\.zapstore\.dev' "$zsp_log" && grep -qiE 'FAILED|failed to connect' "$zsp_log"; then
+              echo "::error::Zapstore relay unreachable. Re-run Publish to ZAPstore for this tag."
+            elif ! grep -q 'Signer type' "$zsp_log" || grep -qiE 'bunker.*(error|fail)|(error|fail).*bunker' "$zsp_log"; then
+              echo "::error::Bunker did not answer within 10 min. Is Amber running? Re-run Publish to ZAPstore for this tag."
+            else
+              echo "::error::zsp timed out after 10 min (see log). Re-run Publish to ZAPstore for this tag."
+            fi
+            exit "$rc"
+          fi
+          if [ "$rc" -ne 0 ]; then
+            exit "$rc"
+          fi
+          if grep -E 'upload failed|failed to publish event|FAILED \(' "$zsp_log"; then
+            echo "::error::zsp exited 0 but reported an upload or relay failure"
+            exit 1
+          fi
+
+      - name: Verify APK on CDN and release on the relay
+        env:
+          VERSION_TAG: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          python3 -m venv /tmp/zapstore-venv
+          /tmp/zapstore-venv/bin/pip install --quiet 'websockets>=13'
+          /tmp/zapstore-venv/bin/python .github/scripts/verify_zapstore_release.py \
+            --metadata /tmp/apk.json \
+            --tag "$VERSION_TAG" \
+            --zapstore-yaml zapstore.yaml

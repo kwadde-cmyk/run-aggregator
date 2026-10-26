@@ -18,7 +18,7 @@ Aggregate and analyze running data from Google Health (formerly Fitbit) and ASIC
 - Flutter (Android + Web)
 - Local storage (SQLite / Hive planned)
 - Open-Meteo for weather (no API key needed for non-commercial)
-- GitHub Actions for automated APK builds and ZAPstore publishing
+- GitHub Actions for signed APK builds and ZAPstore publishing (see RELEASING.md)
 
 ## Getting Started
 
@@ -80,14 +80,12 @@ Raw trackpoints enable split calculations and intermediate times.
 
 ## ZAPstore Publishing
 
-Automated via GitHub Actions on release tags (or workflow_dispatch). Requires:
+Releases are started by hand from GitHub Actions. See `RELEASING.md`.
 
-- Android signing keystore secrets: `KEYSTORE_BASE64`, `STORE_PASSWORD`, `KEY_PASSWORD`, `KEY_ALIAS`
-- Nostr signing for ZAPstore: `SIGN_WITH` secret (bunker URL recommended, or nsec)
+- **Release** builds the signed universal APK, creates the GitHub Release, then publishes to ZAPstore.
+- **Publish to ZAPstore** repeats only the publish for an existing tag.
 
-See `.github/workflows/release.yml` and `zapstore.yaml`.
-
-To publish: create a GitHub Release with a tag (e.g. v1.0.0). The workflow builds the APK(s) and publishes to ZAPstore (if secrets are set).
+Creating a GitHub Release in the UI does not start those workflows. Signing secrets: `KEYSTORE_BASE64`, `STORE_PASSWORD`, `KEY_PASSWORD`, `KEY_ALIAS`. Nostr signing: `SIGN_WITH` (bunker URL) and `ZSP_BUNKER_CLIENT_KEY`.
 
 ## Development Status
 

@@ -99,11 +99,13 @@ cd ~/run-aggregator
 flutter build apk --release
 ```
 
-Die APK liegt danach unter:
+Ohne `--split-per-abi`. Die APK liegt danach unter:
 
 ```
 build/app/outputs/flutter-apk/app-release.apk
 ```
+
+Für ZAPstore zählt der `versionCode` aus `pubspec.yaml` (Zahl nach `+`). Der muss über 2004 liegen. Ablauf: `RELEASING.md`.
 
 ## 7. Testen
 
@@ -116,12 +118,7 @@ Beim ersten Start sollte der Google-Login funktionieren (weil der SHA-1 registri
 
 ## 8. ZAPstore
 
-Für die Veröffentlichung im ZAPstore brauchst du zusätzlich:
-
-- Eine Nostr-Identität (nsec oder Bunker-URL)
-- Die Secrets in GitHub Actions (siehe `.github/workflows/release.yml`)
-
-Oder manuell mit dem [zapstore-cli](https://github.com/zapstore/zapstore-cli).
+Veröffentlichen und einen fehlgeschlagenen Publish wiederholen: `RELEASING.md`.
 
 ## Sicherheit
 
