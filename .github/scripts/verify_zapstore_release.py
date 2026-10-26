@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Fail a ZAPstore publish unless the APK is actually an update and is live.
+"""Fail a ZAPstore publish unless the APK is an update and is actually live.
 
-zsp v0.4.17 can exit 0 after writing Nostr events whose Blossom URL 404s.
-`--json` also suppresses the per-event relay OK/FAILED lines. This script is
-the loud check the workflow runs before and after `zsp publish`.
+zsp v0.4.17 can exit 0 after the relay answers OK while the listing stays
+pending. `--quiet` skips certificate linking, and relay v2 only promotes a
+listing when an active kind 30509 ties the APK signing cert to the publisher.
+Until then the CDN returns 404 and kind 30063/3063 are not queryable.
 """
 
 from __future__ import annotations
@@ -22,6 +23,15 @@ PACKAGE_ID = "de.kwadde.run_aggregator"
 MIN_VERSION_CODE = 2004
 CDN = "https://cdn.zapstore.dev"
 RELAY = "wss://relay.zapstore.dev"
+PUBLISHER_HEX = "bc06043b21c34ab8ae802cf6a9498c1695a85b4995c4403a3dba42818b5e7c6b"
+# Longer than the old 3x5s loop. Promotion after an accepted upload is not instant.
+CDN_ATTEMPTS = 8
+CDN_RETRY_SECONDS = 15
+LINK_KEY_COMMAND = (
+    "KEYSTORE_PASSWORD='…' KEYSTORE_KEY_PASSWORD='…' SIGN_WITH='bunker://…' "
+    "zsp identity --link-key ~/run-aggregator.keystore "
+    "--key-alias runaggregator --relays wss://relay.zapstore.dev"
+)
 # The relay reads repository + pubkey from the public repo to whitelist.
 EXPECTED_REPOSITORY = "https://github.com/kwadde-cmyk/run-aggregator"
 EXPECTED_RELEASE_SOURCE = "./build/app/outputs/flutter-apk/app-release.apk"
@@ -92,10 +102,53 @@ def decode_npub(npub: str) -> str:
 def self_test() -> None:
     # Vector from the signed events already on relay.zapstore.dev.
     got = decode_npub("npub1hsrqgwepcd9t3t5q9nm2jjvvz626sk6fjhzyqw3ahfpgrz67034sldsnpz")
-    want = "bc06043b21c34ab8ae802cf6a9498c1695a85b4995c4403a3dba42818b5e7c6b"
-    if got != want:
-        raise SystemExit(f"npub self-test failed: {got} != {want}")
+    if got != PUBLISHER_HEX:
+        raise SystemExit(f"npub self-test failed: {got} != {PUBLISHER_HEX}")
     print(f"npub self-test ok ({got})")
+    now = 1_700_000_000
+    cert = "ab" * 32
+    active = {
+        "kind": 30509,
+        "pubkey": PUBLISHER_HEX,
+        "id": "aa",
+        "created_at": now - 10,
+        "tags": [["d", cert.upper()], ["expiry", str(now + 100)], ["signature", "x"]],
+    }
+    expired = {
+        "kind": 30509,
+        "pubkey": PUBLISHER_HEX,
+        "id": "bb",
+        "created_at": now - 100,
+        "tags": [["d", cert], ["expiry", str(now - 1)]],
+    }
+    revoked = {
+        "kind": 30509,
+        "pubkey": PUBLISHER_HEX,
+        "id": "cc",
+        "created_at": now - 10,
+        "tags": [["d", cert], ["expiry", str(now + 50)], ["revoked", "rotated"]],
+    }
+    event, state, _detail = classify_identity_proofs(
+        [expired, revoked, active], pubkey=PUBLISHER_HEX, cert=cert, now=now
+    )
+    if state != "active" or event is None or event.get("id") != "aa":
+        raise SystemExit(f"active identity proof was not selected: {state} {event}")
+    _event, state, detail = classify_identity_proofs(
+        [expired], pubkey=PUBLISHER_HEX, cert=cert, now=now
+    )
+    if state != "missing" or "expired" not in detail:
+        raise SystemExit(f"expired proof was not rejected: {state} {detail}")
+    _event, state, detail = classify_identity_proofs(
+        [revoked], pubkey=PUBLISHER_HEX, cert=cert, now=now
+    )
+    if state != "missing" or "revoked" not in detail:
+        raise SystemExit(f"revoked proof was not rejected: {state} {detail}")
+    _event, state, detail = classify_identity_proofs(
+        [], pubkey=PUBLISHER_HEX, cert=cert, now=now
+    )
+    if state != "missing" or "zsp identity --link-key" not in detail:
+        raise SystemExit(f"missing proof was not rejected: {state} {detail}")
+    print("identity proof self-test ok")
 
 
 def yaml_scalar(path: Path, key: str) -> str:
@@ -137,6 +190,11 @@ def check_zapstore_yaml(path: Path) -> str:
         raise SystemExit(f"{path}: icon {icon} is not a file ({icon_path})")
     npub = yaml_scalar(path, "pubkey")
     pubkey = decode_npub(npub)
+    if pubkey != PUBLISHER_HEX:
+        raise SystemExit(
+            f"{path}: pubkey decodes to {pubkey}, want {PUBLISHER_HEX}. "
+            "The kind 30509 proof and the release events must share this author."
+        )
     print(f"zapstore.yaml name={name!r} summary={summary!r}")
     print(f"zapstore.yaml repository={repository}")
     print(f"zapstore.yaml release_source={release_source}")
@@ -205,6 +263,104 @@ def check_version(
     )
 
 
+def _utc(timestamp: int) -> str:
+    return time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(timestamp))
+
+
+def classify_identity_proofs(
+    events: list[dict],
+    *,
+    pubkey: str,
+    cert: str,
+    now: int,
+    relay: str = RELAY,
+) -> tuple[dict | None, str, str]:
+    """Pick an active kind 30509, or explain why none qualifies.
+
+    Returns (event, state, detail). state is "active" or "missing".
+    """
+    cert = cert.lower()
+    active: list[tuple[int, dict]] = []
+    expired: list[str] = []
+    revoked: list[str] = []
+    for event in events:
+        if event.get("kind") not in (None, 30509):
+            continue
+        if event.get("pubkey") != pubkey:
+            continue
+        expiry_raw = None
+        d_values: list[str] = []
+        is_revoked = False
+        revoke_reason = ""
+        for tag in event.get("tags") or []:
+            if not isinstance(tag, list) or not tag:
+                continue
+            if tag[0] == "d" and len(tag) >= 2:
+                d_values.append(str(tag[1]).lower())
+            elif tag[0] == "expiry" and len(tag) >= 2 and expiry_raw is None:
+                expiry_raw = tag[1]
+            elif tag[0] == "revoked":
+                is_revoked = True
+                if len(tag) >= 2:
+                    revoke_reason = str(tag[1])
+        if cert not in d_values:
+            continue
+        event_id = str(event.get("id") or "?")
+        if is_revoked:
+            revoked.append(f"{event_id} ({revoke_reason})" if revoke_reason else event_id)
+            continue
+        try:
+            expiry = int(expiry_raw)
+        except (TypeError, ValueError):
+            expired.append(f"{event_id} has no integer expiry tag")
+            continue
+        created = event.get("created_at")
+        if created is not None:
+            try:
+                if expiry <= int(created):
+                    expired.append(f"{event_id} expiry is not after created_at")
+                    continue
+            except (TypeError, ValueError):
+                pass
+        if expiry <= now:
+            expired.append(f"{event_id} expired {_utc(expiry)}")
+            continue
+        active.append((expiry, event))
+    if active:
+        expiry, event = max(active, key=lambda item: item[0])
+        return (
+            event,
+            "active",
+            f"kind 30509 active id={event.get('id')} cert={cert} "
+            f"pubkey={pubkey} expires {_utc(expiry)}",
+        )
+    if expired:
+        extra = "Existing proof is not active: " + "; ".join(expired) + "."
+    elif revoked:
+        extra = "Existing proof is revoked: " + "; ".join(revoked) + "."
+    else:
+        extra = (
+            f"The relay returned no kind 30509 with authors=[{pubkey}] and #d=[{cert}]."
+        )
+    detail = (
+        f"No active kind 30509 on {relay} linking APK cert {cert} to pubkey {pubkey}. "
+        f"{extra} "
+        "zsp v0.4.17 with --quiet skips certificate linking "
+        "(checkAndLinkCertificate returns without a proof). "
+        "Relay v2 keeps the app, release, and asset events pending until an active "
+        "kind 30509 exists: the CDN stays 404 (blob not found) and kind 30063/3063 "
+        "are not queryable. Pending listings expire after about 5 hours. "
+        "Create the proof once locally (valid 1 year, renew yearly), then re-run "
+        "Publish to ZAPstore for the same tag: "
+        f"{LINK_KEY_COMMAND}"
+    )
+    return None, "missing", detail
+
+
+def actions_error(message: str) -> None:
+    print("::error::" + " ".join(message.split()))
+
+
 def curl_code(url: str, extra: list[str]) -> str:
     completed = subprocess.run(
         ["curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}", *extra, "--", url],
@@ -219,36 +375,50 @@ def curl_code(url: str, extra: list[str]) -> str:
     return code
 
 
-def check_cdn(sha256: str, cdn: str) -> list[str]:
+def check_cdn(sha256: str, cdn: str) -> tuple[bool, str, str, str]:
+    """HEAD and a one-byte GET, retried while the listing may still be pending."""
     url = f"{cdn.rstrip('/')}/{sha256}"
-    errors: list[str] = []
-    for attempt in range(1, 4):
-        print(f"CDN attempt {attempt}: checking {url}")
+    head = ""
+    final = ""
+    for attempt in range(1, CDN_ATTEMPTS + 1):
+        print(f"CDN attempt {attempt}/{CDN_ATTEMPTS}: checking {url}", flush=True)
         head = curl_code(url, ["-I"])
         final = curl_code(url, ["-L", "-r", "0-0"])
-        print(f"CDN HEAD {head} {url}")
-        print(f"CDN GET  {final} {url} (redirects followed, first byte only)")
+        print(f"CDN HEAD {head} {url}", flush=True)
+        print(
+            f"CDN GET  {final} {url} (redirects followed, first byte only)",
+            flush=True,
+        )
         if head == "200" and final in ("200", "206"):
-            return []
-        if attempt < 3:
-            print("CDN blob not ready, retrying")
-            time.sleep(5)
-    if head != "200":
-        errors.append(
-            f"APK blob is not on {cdn} (HEAD {head} for {url}). "
-            "zsp v0.4.17 publishes the Nostr events before the Blossom upload "
-            "and can still exit 0 when the blob is missing. A 401/403, or a "
-            "log line 'unauthorized' / 'whitelist', means this npub cannot PUT "
-            "to the CDN. zapstore.yaml whitelists the relay, not the CDN. "
-            "After the npub is allowed to upload, re-run Publish to ZAPstore "
-            "for the same tag."
-        )
-    if final not in ("200", "206"):
-        errors.append(
-            f"Downloading the APK failed (HTTP {final} for {url}). "
-            "HEAD can succeed while the redirect target is missing."
-        )
-    return errors
+            return True, head, final, url
+        if attempt < CDN_ATTEMPTS:
+            print(
+                f"CDN blob not ready (HEAD {head}), retrying in {CDN_RETRY_SECONDS}s",
+                flush=True,
+            )
+            time.sleep(CDN_RETRY_SECONDS)
+    return False, head, final, url
+
+
+def cdn_failure_message(head: str, final: str, url: str, cdn: str, proof_detail: str) -> list[str]:
+    waited = f"after {CDN_ATTEMPTS} attempts, {CDN_RETRY_SECONDS}s apart"
+    if head == "200" and final not in ("200", "206"):
+        return [
+            f"Downloading the APK failed (HTTP {final} for {url}) {waited}. "
+            "HEAD can succeed while the redirect target is missing. "
+            f"{proof_detail}"
+        ]
+    if head in ("401", "403"):
+        return [
+            f"APK blob was refused by {cdn} (HEAD {head} for {url}) {waited}. "
+            "A 401/403 means this npub cannot PUT to the CDN. "
+            "zapstore.yaml whitelists the relay, not the CDN. "
+            f"{proof_detail}"
+        ]
+    return [
+        f"APK blob is not on {cdn} (HEAD {head} for {url}) {waited}. "
+        f"{proof_detail}"
+    ]
 
 
 def _tags(event: dict) -> dict[str, list[str]]:
@@ -360,6 +530,37 @@ def check_relay(
     return errors
 
 
+def query_identity_proof(relay: str, pubkey: str, cert: str) -> tuple[dict | None, str, str]:
+    filters = {
+        "identity": {
+            "kinds": [30509],
+            "authors": [pubkey],
+            "#d": [cert],
+            "limit": 20,
+        }
+    }
+    last_error = "no attempt"
+    for attempt in range(1, 4):
+        try:
+            found = asyncio.run(_relay_query(relay, filters))
+        except Exception as exc:  # connection, timeout, bad frame
+            last_error = str(exc)
+            print(f"kind 30509 query attempt {attempt} failed: {exc}", flush=True)
+            if attempt < 3:
+                time.sleep(5)
+            continue
+        return classify_identity_proofs(
+            found["identity"], pubkey=pubkey, cert=cert, now=int(time.time()), relay=relay
+        )
+    return (
+        None,
+        "unreachable",
+        f"Could not query {relay} for kind 30509 "
+        f"(authors=[{pubkey}] #d=[{cert}]): {last_error}. "
+        "Refusing to treat the certificate link as present.",
+    )
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--self-test", action="store_true")
@@ -368,12 +569,21 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--version-name")
     parser.add_argument("--version-code", type=int)
     parser.add_argument("--sha256")
+    parser.add_argument(
+        "--cert-fingerprint",
+        help="APK signing cert SHA-256 from `zsp utils extract-apk` (cert_fingerprint)",
+    )
     parser.add_argument("--tag", help="Git tag, e.g. v1.0.5")
     parser.add_argument("--expected-version-name")
     parser.add_argument("--expected-version-code", type=int)
     parser.add_argument("--min-version-code", type=int, default=MIN_VERSION_CODE)
     parser.add_argument("--zapstore-yaml", type=Path)
     parser.add_argument("--skip-network", action="store_true")
+    parser.add_argument(
+        "--require-identity-proof",
+        action="store_true",
+        help="Query kind 30509 and exit. Run this before zsp publish.",
+    )
     parser.add_argument("--cdn", default=CDN)
     parser.add_argument("--relay", default=RELAY)
     return parser.parse_args(argv)
@@ -389,13 +599,17 @@ def main(argv: list[str]) -> int:
     version_name = args.version_name
     version_code = args.version_code
     sha256 = args.sha256
+    cert = args.cert_fingerprint
     if args.metadata:
         meta = load_metadata(args.metadata)
         package = package or meta["package_id"]
         version_name = version_name or meta["version_name"]
         if version_code is None:
             version_code = int(meta["version_code"])
-        sha256 = sha256 or meta["sha256"]
+        sha256 = sha256 or meta.get("sha256")
+        cert = cert or meta.get("cert_fingerprint")
+    if cert:
+        cert = str(cert).strip().lower()
 
     missing = [
         name
@@ -421,6 +635,23 @@ def main(argv: list[str]) -> int:
     pubkey = ""
     if args.zapstore_yaml is not None:
         pubkey = check_zapstore_yaml(args.zapstore_yaml)
+    if args.require_identity_proof:
+        if args.skip_network:
+            raise SystemExit("--require-identity-proof cannot be combined with --skip-network")
+        if not pubkey:
+            raise SystemExit("--zapstore-yaml is required to know the kind 30509 author")
+        if not cert or len(cert) != 64 or any(c not in "0123456789abcdef" for c in cert):
+            raise SystemExit(
+                "cert_fingerprint must be 64 hex chars from `zsp utils extract-apk` "
+                f"(got {cert!r})"
+            )
+        _event, state, detail = query_identity_proof(args.relay, pubkey, cert)
+        print(detail)
+        if state != "active":
+            actions_error(detail)
+            return 1
+        print("identity proof ok")
+        return 0
     if args.skip_network:
         print("network checks skipped")
         return 0
@@ -432,7 +663,34 @@ def main(argv: list[str]) -> int:
     if args.zapstore_yaml is None:
         raise SystemExit("--zapstore-yaml is required for the relay check")
 
-    errors = check_cdn(sha256, args.cdn)
+    on_cdn, head, final, cdn_url = check_cdn(sha256, args.cdn)
+    errors: list[str] = []
+    if not on_cdn:
+        if cert and len(cert) == 64:
+            _event, state, detail = query_identity_proof(args.relay, pubkey, cert)
+            if state == "active":
+                detail = (
+                    f"{detail} The identity proof is active, so this 404 is the relay "
+                    "still holding the listing pending (CDN 'blob not found') or a blob "
+                    "that was not stored. Pending listings are not queryable as kind "
+                    "30063/3063 and expire after about 5 hours. Re-run Publish to "
+                    "ZAPstore for this tag once the listing is promoted."
+                )
+            elif state == "unreachable":
+                detail = (
+                    f"{detail} Run 40412044876 showed the other cause: zsp got relay OK "
+                    "and the upload was accepted, but without an active kind 30509 the "
+                    "relay keeps the listing pending (CDN 404 'blob not found', no "
+                    "queryable kind 30063/3063) for about 5 hours."
+                )
+        else:
+            detail = (
+                "No cert_fingerprint was available to query kind 30509. "
+                "Relay v2 keeps listings pending, CDN 404 'blob not found', until an "
+                "active kind 30509 links the APK signing cert to "
+                f"{pubkey}. Create it with: {LINK_KEY_COMMAND}"
+            )
+        errors.extend(cdn_failure_message(head, final, cdn_url, args.cdn, detail))
     errors.extend(
         check_relay(
             relay=args.relay,
@@ -448,6 +706,7 @@ def main(argv: list[str]) -> int:
         print("verification failed:")
         for error in errors:
             print(f"- {error}")
+            actions_error(error)
         return 1
     print("ZAPstore verification ok: CDN and relay both have this APK")
     return 0
