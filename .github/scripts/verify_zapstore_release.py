@@ -22,6 +22,10 @@ PACKAGE_ID = "de.kwadde.run_aggregator"
 MIN_VERSION_CODE = 2004
 CDN = "https://cdn.zapstore.dev"
 RELAY = "wss://relay.zapstore.dev"
+# The relay reads repository + pubkey from the public repo to whitelist.
+EXPECTED_REPOSITORY = "https://github.com/kwadde-cmyk/run-aggregator"
+EXPECTED_RELEASE_SOURCE = "./build/app/outputs/flutter-apk/app-release.apk"
+EXPECTED_WEBSITE = EXPECTED_REPOSITORY
 
 # BIP-173 bech32. Nostr npubs are 32-byte bech32 (not bech32m).
 _CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
@@ -105,6 +109,41 @@ def yaml_scalar(path: Path, key: str) -> str:
                 raise SystemExit(f"{path}: {key} is empty")
             return value
     raise SystemExit(f"{path}: missing {key}")
+
+
+def check_zapstore_yaml(path: Path) -> str:
+    """Return the publisher hex. The relay whitelists from this committed file."""
+    repository = yaml_scalar(path, "repository")
+    if repository != EXPECTED_REPOSITORY:
+        raise SystemExit(
+            f"{path}: repository is {repository!r}, want {EXPECTED_REPOSITORY!r}. "
+            "The relay reads this URL from the public repo to whitelist the publisher."
+        )
+    website = yaml_scalar(path, "website")
+    if website != EXPECTED_WEBSITE:
+        raise SystemExit(f"{path}: website is {website!r}, want {EXPECTED_WEBSITE!r}")
+    release_source = yaml_scalar(path, "release_source")
+    if release_source != EXPECTED_RELEASE_SOURCE:
+        raise SystemExit(
+            f"{path}: release_source is {release_source!r}, want "
+            f"{EXPECTED_RELEASE_SOURCE!r}. Publish the committed zapstore.yaml. "
+            "Do not pass an .apk path to zsp; that drops pubkey."
+        )
+    name = yaml_scalar(path, "name")
+    summary = yaml_scalar(path, "summary")
+    icon = yaml_scalar(path, "icon")
+    icon_path = (path.parent / icon).resolve()
+    if not icon_path.is_file():
+        raise SystemExit(f"{path}: icon {icon} is not a file ({icon_path})")
+    npub = yaml_scalar(path, "pubkey")
+    pubkey = decode_npub(npub)
+    print(f"zapstore.yaml name={name!r} summary={summary!r}")
+    print(f"zapstore.yaml repository={repository}")
+    print(f"zapstore.yaml release_source={release_source}")
+    print(f"zapstore.yaml icon={icon}")
+    print(f"publisher npub={npub}")
+    print(f"publisher hex={pubkey}")
+    return pubkey
 
 
 def load_metadata(path: Path) -> dict:
@@ -379,6 +418,9 @@ def main(argv: list[str]) -> int:
         expected_version_code=args.expected_version_code,
         min_version_code=args.min_version_code,
     )
+    pubkey = ""
+    if args.zapstore_yaml is not None:
+        pubkey = check_zapstore_yaml(args.zapstore_yaml)
     if args.skip_network:
         print("network checks skipped")
         return 0
@@ -389,11 +431,6 @@ def main(argv: list[str]) -> int:
         raise SystemExit(f"sha256 must be 64 hex chars, got {sha256!r}")
     if args.zapstore_yaml is None:
         raise SystemExit("--zapstore-yaml is required for the relay check")
-
-    npub = yaml_scalar(args.zapstore_yaml, "pubkey")
-    pubkey = decode_npub(npub)
-    print(f"publisher npub={npub}")
-    print(f"publisher hex={pubkey}")
 
     errors = check_cdn(sha256, args.cdn)
     errors.extend(
