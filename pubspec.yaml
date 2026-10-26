@@ -1,7 +1,10 @@
 name: run_aggregator
 description: Aggregate and analyze running data from multiple platforms with raw metrics, splits, filters, and weather correlations.
 publish_to: 'none'
-version: 1.0.4+4
+# Android versionCode is the number after '+'. It must stay greater than 2004
+# (ZAPstore already shipped 2001, 2003 and 2004). Never pass --split-per-abi:
+# Flutter then publishes arm64 as 2000+this number.
+version: 1.0.5+2005
 
 environment:
   sdk: '>=3.5.0 <4.0.0'

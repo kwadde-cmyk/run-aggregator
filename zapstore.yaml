@@ -1,4 +1,6 @@
-# ZAPstore configuration
+# ZAPstore configuration. `zsp publish` must get this file, not an .apk path:
+# an .apk argument ignores pubkey, and the relay uses pubkey to whitelist.
+# CI appends release_source pointing at the APK from the GitHub Release.
 repository: https://github.com/kwadde-cmyk/run-aggregator
 pubkey: npub1hsrqgwepcd9t3t5q9nm2jjvvz626sk6fjhzyqw3ahfpgrz67034sldsnpz
 

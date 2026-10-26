@@ -1,0 +1,178 @@
+name: Publish to ZAPstore
+
+# Publishes one existing GitHub Release to ZAPstore.
+# Called by Release, or started on its own to retry a tag without rebuilding.
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Existing GitHub Release tag, e.g. v1.0.5"
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Existing GitHub Release tag, e.g. v1.0.5"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install zsp
+        # Latest release as of 2026-10-26. `-y` is documented but not implemented;
+        # `--quiet` is the flag that skips prompts. Do not pass --json: it hides
+        # per-event relay results. Do not wrap zsp in `script`.
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/zsp \
+            https://github.com/zapstore/zsp/releases/download/v0.4.17/zsp-0.4.17-linux-amd64
+          echo "3f241da6a5dc7a85fe851d3b42b77790b651bd36c7029382a701262bda832d20  /tmp/zsp" \
+            | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          install -m 0755 /tmp/zsp "$HOME/.local/bin/zsp"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/zsp" --version
+
+      - name: Download APK from GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION_TAG: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/apks
+          ok=0
+          for _ in 1 2 3 4 5 6; do
+            if gh release download "$VERSION_TAG" -p "*.apk" -D /tmp/apks --clobber; then
+              ok=1
+              break
+            fi
+            echo "release $VERSION_TAG not downloadable yet, retrying"
+            sleep 5
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "No APK assets on GitHub Release $VERSION_TAG"
+            exit 1
+          fi
+          ls -la /tmp/apks
+          if [ -f /tmp/apks/app-release.apk ]; then
+            APK=/tmp/apks/app-release.apk
+          elif [ -f /tmp/apks/app-arm64-v8a-release.apk ]; then
+            APK=/tmp/apks/app-arm64-v8a-release.apk
+          else
+            echo "Release $VERSION_TAG has no app-release.apk or arm64 APK"
+            exit 1
+          fi
+          echo "Using $APK"
+          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
+          sha256sum "$APK"
+          zsp utils extract-apk "$APK" | tee /tmp/apk.json
+
+      - name: Reject a versionCode that cannot update
+        env:
+          VERSION_TAG: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/verify_zapstore_release.py \
+            --skip-network \
+            --metadata /tmp/apk.json \
+            --tag "$VERSION_TAG"
+
+      - name: Setup persistent bunker client key
+        env:
+          SIGN_WITH: ${{ secrets.SIGN_WITH }}
+          ZSP_BUNKER_CLIENT_KEY: ${{ secrets.ZSP_BUNKER_CLIENT_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SIGN_WITH:-}" ]; then
+            echo "SIGN_WITH secret is not set (expected a bunker:// URL)"
+            exit 1
+          fi
+          if [ -z "${ZSP_BUNKER_CLIENT_KEY:-}" ]; then
+            echo "ZSP_BUNKER_CLIENT_KEY secret is not set"
+            exit 1
+          fi
+          if [ "${#ZSP_BUNKER_CLIENT_KEY}" -ne 64 ]; then
+            echo "ZSP_BUNKER_CLIENT_KEY must be 64 hex chars (openssl rand -hex 32)"
+            exit 1
+          fi
+          case "$ZSP_BUNKER_CLIENT_KEY" in
+            *[!0-9a-fA-F]*)
+              echo "ZSP_BUNKER_CLIENT_KEY must be hex"
+              exit 1
+              ;;
+          esac
+          BUNKER_PUBKEY=$(printf '%s\n' "$SIGN_WITH" | sed -n 's|^bunker://\([^?]*\).*|\1|p')
+          if [ -z "$BUNKER_PUBKEY" ]; then
+            echo "Could not extract the bunker pubkey from SIGN_WITH"
+            exit 1
+          fi
+          echo "Using bunker pubkey: $BUNKER_PUBKEY"
+          KEY_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/zsp/bunker-keys"
+          mkdir -p "$KEY_DIR"
+          chmod 700 "$KEY_DIR"
+          KEY_FILE="$KEY_DIR/${BUNKER_PUBKEY}.key"
+          printf '%s\n' "$ZSP_BUNKER_CLIENT_KEY" > "$KEY_FILE"
+          chmod 600 "$KEY_FILE"
+          echo "Wrote persistent client key to $KEY_FILE"
+
+      - name: Publish with zsp
+        env:
+          SIGN_WITH: ${{ secrets.SIGN_WITH }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APK_PATH:-}" ]; then
+            echo "APK_PATH was not set by the download step"
+            exit 1
+          fi
+          python3 - << 'PY'
+          import os
+          from pathlib import Path
+          apk = Path(os.environ["APK_PATH"]).resolve()
+          lines = []
+          for line in Path("zapstore.yaml").read_text().splitlines():
+              if line.startswith("release_source:"):
+                  continue
+              lines.append(line)
+          # Local APK plus the committed config. Passing the .apk as zsp's
+          # argument drops pubkey/summary, so the relay cannot whitelist it.
+          lines.append(f'release_source: "{apk}"')
+          Path("/tmp/zapstore.publish.yaml").write_text("\n".join(lines) + "\n")
+          print(Path("/tmp/zapstore.publish.yaml").read_text())
+          PY
+          # --quiet auto-confirms. --verbose prints each relay OK/FAILED.
+          # Without --offline, zsp uploads to Blossom and publishes to the relay.
+          set -o pipefail
+          timeout 900 zsp publish \
+            --quiet \
+            --verbose \
+            --overwrite-release \
+            --skip-certificate-linking \
+            --skip-preview \
+            /tmp/zapstore.publish.yaml \
+            < /dev/null 2>&1 | tee /tmp/zsp-publish.log
+          if grep -E 'upload failed|failed to publish event|FAILED \(' /tmp/zsp-publish.log; then
+            echo "zsp reported an upload or relay failure"
+            exit 1
+          fi
+
+      - name: Verify APK on CDN and release on the relay
+        run: |
+          set -euo pipefail
+          python3 -m venv /tmp/zapstore-venv
+          /tmp/zapstore-venv/bin/pip install --quiet 'websockets>=13'
+          /tmp/zapstore-venv/bin/python .github/scripts/verify_zapstore_release.py \
+            --metadata /tmp/apk.json \
+            --tag "${VERSION_TAG}" \
+            --zapstore-yaml zapstore.yaml
+        env:
+          VERSION_TAG: ${{ inputs.version }}
