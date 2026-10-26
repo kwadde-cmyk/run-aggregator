@@ -1,0 +1,83 @@
+name: Publish to ZAPstore
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag of the GitHub release to publish (e.g. v1.0.4)'
+        required: true
+        default: 'v1.0.4'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install zsp
+        run: |
+          curl -L https://github.com/zapstore/zsp/releases/download/v0.4.17/zsp-0.4.17-linux-amd64 -o zsp
+          chmod +x zsp
+          sudo mv zsp /usr/local/bin/
+
+      - name: Download APK from GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ github.event.inputs.version }}"
+          echo "Downloading APKs from release $VERSION"
+          mkdir -p /tmp/apks
+          gh release download "$VERSION" -p "*.apk" -D /tmp/apks
+          ls -la /tmp/apks/
+          # Prefer arm64
+          APK=$(ls -1 /tmp/apks/*arm64-v8a-release.apk 2>/dev/null | head -1 || ls -1 /tmp/apks/*.apk | head -1)
+          if [ -z "$APK" ]; then
+            echo "ERROR: No APK found in release $VERSION"
+            exit 1
+          fi
+          echo "Using APK: $APK"
+          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
+
+      - name: Setup persistent bunker client key
+        env:
+          SIGN_WITH: ${{ secrets.SIGN_WITH }}
+          ZSP_BUNKER_CLIENT_KEY: ${{ secrets.ZSP_BUNKER_CLIENT_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$ZSP_BUNKER_CLIENT_KEY" ]; then
+            echo "ERROR: ZSP_BUNKER_CLIENT_KEY secret is not set"
+            exit 1
+          fi
+          if [ ${#ZSP_BUNKER_CLIENT_KEY} -ne 64 ]; then
+            echo "ERROR: ZSP_BUNKER_CLIENT_KEY must be 64 hex chars"
+            exit 1
+          fi
+          BUNKER_PUBKEY=$(echo "$SIGN_WITH" | sed -n 's|^bunker://\([^?]*\).*|\1|p')
+          if [ -z "$BUNKER_PUBKEY" ]; then
+            echo "ERROR: Could not extract pubkey from SIGN_WITH"
+            exit 1
+          fi
+          echo "Using bunker pubkey: $BUNKER_PUBKEY"
+          KEY_DIR="$HOME/.config/zsp/bunker-keys"
+          mkdir -p "$KEY_DIR"
+          chmod 700 "$KEY_DIR"
+          KEY_FILE="$KEY_DIR/${BUNKER_PUBKEY}.key"
+          printf '%s\n' "$ZSP_BUNKER_CLIENT_KEY" > "$KEY_FILE"
+          chmod 600 "$KEY_FILE"
+          echo "Wrote persistent client key to $KEY_FILE"
+
+      - name: Publish to ZAPstore
+        env:
+          SIGN_WITH: ${{ secrets.SIGN_WITH }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "Publishing $APK_PATH to ZAPstore..."
+          # Use script for a pseudo-TTY; --json --quiet for CI mode
+          timeout 300 script -qefc "zsp publish --overwrite-release --skip-certificate-linking --json --quiet \"$APK_PATH\" -r https://github.com/kwadde-cmyk/run-aggregator" /dev/null
+          echo "zsp publish finished"
