@@ -24,6 +24,7 @@ class GoogleHealthAuth {
         ),
       );
 
+      // ignore: unnecessary_null_comparison
       if (result != null) {
         await _storage.write(key: _accessTokenKey, value: result.accessToken);
         if (result.refreshToken != null) {

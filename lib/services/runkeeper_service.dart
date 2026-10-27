@@ -160,11 +160,6 @@ class RunkeeperService {
     print('Runkeeper: extracted $gpxCount GPX files');
   }
 
-  static String _formatDate(DateTime dt) {
-    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    return '${dt.day.toString().padLeft(2,'0')}-${months[dt.month-1]}-${(dt.year%100).toString().padLeft(2,'0')}';
-  }
-
   /// Extract date from GPX filename like "2026-10-20-142717.gpx" → DateTime(2026,10,20)
   static DateTime? _dateFromFilename(String name) {
     final match = RegExp(r'(\d{4})-(\d{2})-(\d{2})').firstMatch(name);

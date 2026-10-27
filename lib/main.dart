@@ -2,30 +2,46 @@ import 'package:flutter/material.dart';
 import 'screens/login_screen.dart';
 import 'services/google_health_auth.dart';
 import 'screens/home_screen.dart';
+import 'theme/app_theme.dart';
+import 'widgets/run_widgets.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await AppThemeController.instance.load();
   runApp(const RunAggregatorApp());
 }
 
-class RunAggregatorApp extends StatelessWidget {
+class RunAggregatorApp extends StatefulWidget {
   const RunAggregatorApp({super.key});
+
+  @override
+  State<RunAggregatorApp> createState() => _RunAggregatorAppState();
+}
+
+class _RunAggregatorAppState extends State<RunAggregatorApp> {
+  final _theme = AppThemeController.instance;
+
+  @override
+  void initState() {
+    super.initState();
+    _theme.addListener(_onTheme);
+  }
+
+  @override
+  void dispose() {
+    _theme.removeListener(_onTheme);
+    super.dispose();
+  }
+
+  void _onTheme() => setState(() {});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Run Aggregator',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
-        useMaterial3: true,
-      ),
-      darkTheme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.blue,
-          brightness: Brightness.dark,
-        ),
-        useMaterial3: true,
-      ),
-      themeMode: ThemeMode.system,
+      theme: AppTheme.light(),
+      darkTheme: AppTheme.dark(),
+      themeMode: _theme.mode,
       home: const _AuthGate(),
     );
   }
@@ -41,7 +57,7 @@ class _AuthGate extends StatelessWidget {
       builder: (context, snapshot) {
         if (snapshot.connectionState != ConnectionState.done) {
           return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
+            body: LoadingState(message: 'Anmeldung wird geprüft'),
           );
         }
         if (snapshot.data == true) {
