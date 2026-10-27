@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'screens/login_screen.dart';
 import 'services/google_health_auth.dart';
 import 'screens/home_screen.dart';
@@ -42,6 +43,13 @@ class _RunAggregatorAppState extends State<RunAggregatorApp> {
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
       themeMode: _theme.mode,
+      locale: const Locale('de'),
+      supportedLocales: const [Locale('de'), Locale('en')],
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
       home: const _AuthGate(),
     );
   }

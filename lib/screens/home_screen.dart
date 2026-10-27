@@ -1,7 +1,12 @@
 import 'package:flutter/material.dart';
+import '../db/run_repository.dart';
 import '../format/run_format.dart';
 import '../services/google_health_auth.dart';
 import '../services/google_health_service.dart';
+import '../services/google_run_details.dart';
+import '../services/rate_limit.dart';
+import '../services/run_points.dart';
+import '../services/run_sync.dart';
 import '../services/runkeeper_service.dart';
 import '../services/weather_service.dart';
 import '../theme/app_theme.dart';
@@ -24,6 +29,12 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _loading = true;
   String? _error;
   bool _runkeeperBusy = false;
+  bool _syncing = false;
+  bool _importing = false;
+  bool _offline = false;
+  int _storedCount = 0;
+  DateTime? _latestStored;
+  ImportCursor? _importCursor;
   int _section = 0;
 
   // Filters
@@ -82,31 +93,82 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  bool _isRunning(Map<String, dynamic> item) {
-    final exercise = item['exercise'] as Map<String, dynamic>? ?? {};
-    final type = (exercise['exerciseType'] ?? '').toString().toUpperCase();
-    final name = (exercise['displayName'] ?? '').toString().toLowerCase();
-    return type == 'RUNNING' || name.contains('laufen') || name.contains('running');
+  RunSync _syncFor(RunRepository repo) {
+    return RunSync(
+      repository: repo,
+      source: GoogleExercisePageSource(),
+      details: GoogleRunDetailFetcher(),
+      betweenPages: const Duration(milliseconds: 200),
+    );
+  }
+
+  bool _sameRunOrder(List<Map<String, dynamic>> a, List<Map<String, dynamic>> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (stableRunId(a[i]) != stableRunId(b[i])) return false;
+    }
+    return true;
+  }
+
+  Future<void> _applyStoredStatus(RunRepository repo) async {
+    _storedCount = await repo.countRuns();
+    _latestStored = await repo.latestStart();
+    _importCursor = await repo.importCursor();
   }
 
   Future<void> _loadExercises({bool forceRefresh = false}) async {
+    if (forceRefresh) GoogleHealthService.clearCache();
+    final showFullLoader = _exercises.isEmpty;
     setState(() {
-      _loading = true;
+      if (showFullLoader) _loading = true;
       _error = null;
+      _syncing = true;
     });
+
+    final repo = await RunRepository.openIfPossible();
+    var local = <Map<String, dynamic>>[];
+    if (repo != null) {
+      local = await repo.listRuns();
+      await _applyStoredStatus(repo);
+      if (local.isNotEmpty && mounted) {
+        setState(() {
+          _exercises = local;
+          _loading = false;
+        });
+        _loadTemperatures(local);
+      }
+    }
+
     try {
-      if (forceRefresh) GoogleHealthService.clearCache();
-      final data = await GoogleHealthService.getExercises(forceRefresh: forceRefresh);
-      final runs = data.where(_isRunning).toList();
+      final watermark = repo == null ? null : await repo.latestStart();
+      if (repo != null && watermark != null) {
+        await _syncFor(repo).syncIncremental();
+        local = await repo.listRuns();
+      } else {
+        final incoming = await GoogleHealthService.getExercises(forceRefresh: forceRefresh);
+        final runs = incoming.where(isRunningExercise).toList();
+        if (repo != null) {
+          await repo.upsertRuns(runs);
+          local = await repo.listRuns();
+        } else {
+          local = runs;
+        }
+      }
+      if (!mounted) return;
+      final keepSelection = !forceRefresh && _sameRunOrder(_exercises, local);
+      if (repo != null) await _applyStoredStatus(repo);
       setState(() {
-        _exercises = runs;
+        _exercises = local;
         _loading = false;
-        _selected.clear();
+        _syncing = false;
+        _offline = false;
+        _error = null;
+        _storedCount = local.length;
+        if (!keepSelection) _selected.clear();
       });
-      // Load temperatures in background
-      _loadTemperatures(runs);
+      _loadTemperatures(local);
     } catch (e) {
-      final msg = e.toString();
+      if (!mounted) return;
       if (googleHealthErrorRequiresLogin(e)) {
         await GoogleHealthAuth.logout();
         if (mounted) {
@@ -116,11 +178,180 @@ class _HomeScreenState extends State<HomeScreen> {
         }
         return;
       }
+      if (repo != null) {
+        local = await repo.listRuns();
+        await _applyStoredStatus(repo);
+      }
+      if (!mounted) return;
+      if (local.isNotEmpty) {
+        final notice = e is RateLimited
+            ? 'Google Health begrenzt die Anfragen. Gespeicherte Läufe bleiben sichtbar.'
+            : 'Keine Verbindung. Gespeicherte Läufe werden angezeigt.';
+        setState(() {
+          _exercises = local;
+          _loading = false;
+          _syncing = false;
+          _offline = true;
+          _error = null;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(notice)));
+        return;
+      }
       setState(() {
-        _error = msg;
+        _error = e.toString();
         _loading = false;
+        _syncing = false;
       });
     }
+  }
+
+  Future<DateTime?> _pickSince(DateTime? current) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    var initial = current ?? DateTime(now.year - 1, now.month, now.day);
+    if (initial.isAfter(today)) initial = today;
+    if (initial.isBefore(DateTime(2005))) initial = DateTime(2005);
+    return showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(2005),
+      lastDate: today,
+      helpText: 'Alle Läufe seit',
+      cancelText: 'Abbrechen',
+      confirmText: 'Übernehmen',
+      fieldHintText: 'TT.MM.JJJJ',
+    );
+  }
+
+  Future<void> _importSince({bool forcePick = false}) async {
+    if (_importing) return;
+    final repo = await RunRepository.openIfPossible();
+    if (repo == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Die lokale Datenbank ist nicht verfügbar.')),
+      );
+      return;
+    }
+    final existing = await repo.importCursor();
+    final DateTime? since;
+    if (!forcePick && existing != null && !existing.done) {
+      since = existing.since;
+    } else {
+      since = await _pickSince(existing?.since);
+    }
+    if (since == null || !mounted) return;
+
+    final progress = ValueNotifier<ImportProgress>(
+      ImportProgress(
+        since: since,
+        pagesDone: existing?.pagesDone ?? 0,
+        runsStored: _storedCount,
+        detailsDone: 0,
+        paging: true,
+        paused: false,
+        done: false,
+      ),
+    );
+    var cancel = false;
+    setState(() => _importing = true);
+    final dialog = showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return ValueListenableBuilder<ImportProgress>(
+          valueListenable: progress,
+          builder: (context, value, _) {
+            final scheme = Theme.of(context).colorScheme;
+            final text = Theme.of(context).textTheme;
+            return AlertDialog(
+              title: const Text('Alle Läufe seit Datum holen'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Seit ${formatGermanDate(value.since)}',
+                    style: text.titleSmall,
+                  ),
+                  const SizedBox(height: AppSpacing.md),
+                  Text(value.statusLine, style: text.bodyMedium),
+                  const SizedBox(height: AppSpacing.lg),
+                  if (!value.done && !value.paused) const LinearProgressIndicator(),
+                  if (value.done)
+                    Padding(
+                      padding: const EdgeInsets.only(top: AppSpacing.sm),
+                      child: Text(
+                        'Weitere Aktualisierungen laden nur neue Läufe.',
+                        style: text.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+                      ),
+                    ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    if (value.done || value.paused) {
+                      Navigator.of(dialogContext).pop();
+                    } else {
+                      cancel = true;
+                    }
+                  },
+                  child: Text(value.done || value.paused ? 'Schließen' : 'Pause'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    try {
+      final result = await _syncFor(repo).importSince(
+        since,
+        isCancelled: () => cancel,
+        onProgress: (value) => progress.value = value,
+      );
+      progress.value = result;
+      if (mounted) {
+        final runs = await repo.listRuns();
+        await _applyStoredStatus(repo);
+        setState(() {
+          _exercises = runs;
+          _loading = false;
+          _error = null;
+          _offline = false;
+          _selected.clear();
+        });
+        _loadTemperatures(runs);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      if (googleHealthErrorRequiresLogin(e)) {
+        Navigator.of(context).pop();
+        await GoogleHealthAuth.logout();
+        if (mounted) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => const LoginScreen()),
+          );
+        }
+        return;
+      }
+      progress.value = ImportProgress(
+        since: since,
+        pagesDone: progress.value.pagesDone,
+        runsStored: progress.value.runsStored,
+        detailsDone: progress.value.detailsDone,
+        paging: false,
+        paused: true,
+        done: false,
+        message: 'Fehler: $e',
+      );
+    }
+
+    await dialog;
+    progress.dispose();
+    if (mounted) setState(() => _importing = false);
   }
 
   Future<void> _loadTemperatures(List<Map<String, dynamic>> runs) async {
@@ -308,7 +539,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return AppBar(
       title: Text(titles[_section]),
       actions: [
-        if (_section == 0 && _runkeeperBusy)
+        if (_section == 0 && (_runkeeperBusy || _syncing || _importing))
           const Padding(
             padding: EdgeInsets.all(16),
             child: SizedBox(
@@ -320,7 +551,7 @@ class _HomeScreenState extends State<HomeScreen> {
         if (_section == 0)
           IconButton(
             tooltip: 'Google aktualisieren',
-            onPressed: () => _loadExercises(forceRefresh: true),
+            onPressed: (_syncing || _importing) ? null : () => _loadExercises(forceRefresh: true),
             icon: const Icon(Icons.refresh),
           ),
       ],
@@ -380,7 +611,14 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       2 => _MorePage(
           runkeeperBusy: _runkeeperBusy,
-          onRefresh: () => _loadExercises(forceRefresh: true),
+          importing: _importing,
+          syncing: _syncing,
+          storedCount: _storedCount,
+          latestStored: _latestStored,
+          importCursor: _importCursor,
+          onRefresh: (_syncing || _importing) ? null : () => _loadExercises(forceRefresh: true),
+          onImport: _importing ? null : () => _importSince(),
+          onImportFresh: _importing ? null : () => _importSince(forcePick: true),
           onRunkeeperLogin: _openRunkeeperLogin,
           onRunkeeperSync: _runkeeperBusy ? null : () => _checkRunkeeper(force: true),
           onLogout: _logout,
@@ -411,6 +649,7 @@ class _HomeScreenState extends State<HomeScreen> {
             physics: const AlwaysScrollableScrollPhysics(),
             slivers: [
               if (filtered.isNotEmpty) SliverToBoxAdapter(child: _summary(filtered)),
+              if (_offline) SliverToBoxAdapter(child: _offlineBanner()),
               if (_hasFilters) SliverToBoxAdapter(child: _filterBanner()),
               if (_selected.isNotEmpty) SliverToBoxAdapter(child: _selectionBanner()),
               if (filtered.isEmpty)
@@ -488,6 +727,25 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _offlineBanner() {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(AppSpacing.lg, 0, AppSpacing.lg, AppSpacing.sm),
+      child: Row(
+        children: [
+          Icon(Icons.cloud_off, size: 18, color: scheme.onSurfaceVariant),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Text(
+              'Offline · gespeicherte Läufe',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -655,14 +913,28 @@ class _HomeScreenState extends State<HomeScreen> {
 class _MorePage extends StatelessWidget {
   const _MorePage({
     required this.runkeeperBusy,
+    required this.importing,
+    required this.syncing,
+    required this.storedCount,
+    required this.latestStored,
+    required this.importCursor,
     required this.onRefresh,
+    required this.onImport,
+    required this.onImportFresh,
     required this.onRunkeeperLogin,
     required this.onRunkeeperSync,
     required this.onLogout,
   });
 
   final bool runkeeperBusy;
-  final VoidCallback onRefresh;
+  final bool importing;
+  final bool syncing;
+  final int storedCount;
+  final DateTime? latestStored;
+  final ImportCursor? importCursor;
+  final VoidCallback? onRefresh;
+  final VoidCallback? onImport;
+  final VoidCallback? onImportFresh;
   final VoidCallback onRunkeeperLogin;
   final VoidCallback? onRunkeeperSync;
   final VoidCallback onLogout;
@@ -710,11 +982,43 @@ class _MorePage extends StatelessWidget {
               'Daten',
               style: text.titleMedium?.copyWith(fontWeight: FontWeight.w600),
             ),
+            const SizedBox(height: AppSpacing.sm),
+            Text(
+              _storedLine(),
+              style: text.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+            ),
             const SizedBox(height: AppSpacing.md),
             FilledButton.icon(
+              onPressed: onImport,
+              icon: importing
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.history),
+              label: const Text('Alle Läufe seit Datum holen'),
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            Text(
+              _importHint(),
+              style: text.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+            if (importCursor != null && !importCursor!.done) ...[
+              const SizedBox(height: AppSpacing.xs),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton(
+                  onPressed: onImportFresh,
+                  child: const Text('Anderes Datum wählen'),
+                ),
+              ),
+            ],
+            const SizedBox(height: AppSpacing.md),
+            FilledButton.tonalIcon(
               onPressed: onRefresh,
               icon: const Icon(Icons.refresh),
-              label: const Text('Google aktualisieren'),
+              label: Text(syncing ? 'Aktualisiere …' : 'Google aktualisieren'),
             ),
             const SizedBox(height: AppSpacing.sm),
             FilledButton.tonalIcon(
@@ -745,6 +1049,27 @@ class _MorePage extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  String _storedLine() {
+    if (storedCount == 0) {
+      return 'Auf diesem Gerät sind noch keine Läufe gespeichert.';
+    }
+    final noun = storedCount == 1 ? 'Lauf' : 'Läufe';
+    final newest = latestStored == null ? '' : ' · neuester ${formatGermanDate(latestStored!)}';
+    return '$storedCount $noun auf diesem Gerät$newest';
+  }
+
+  String _importHint() {
+    final cursor = importCursor;
+    if (cursor == null) {
+      return 'Einmalig alle Läufe ab einem Startdatum laden. Danach holt Aktualisieren nur noch neue Läufe.';
+    }
+    final date = formatGermanDate(cursor.since);
+    if (!cursor.done) {
+      return 'Import seit $date ist pausiert (${cursor.runsStored} Läufe). Der Button setzt ihn fort.';
+    }
+    return 'Import seit $date ist abgeschlossen. Aktualisieren holt nur neue Läufe.';
   }
 }
 
