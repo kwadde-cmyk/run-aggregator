@@ -2,8 +2,11 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import '../format/run_format.dart';
 import '../services/google_health_service.dart';
 import '../services/runkeeper_service.dart';
+import '../theme/app_theme.dart';
+import '../widgets/run_widgets.dart';
 
 class ExerciseDetailScreen extends StatefulWidget {
   final Map<String, dynamic> exercisePoint;
@@ -16,21 +19,9 @@ class ExerciseDetailScreen extends StatefulWidget {
 
 class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
 
-  String _formatPace(double? minPerKm) {
-    if (minPerKm == null || minPerKm <= 0) return '-';
-    final totalSec = (minPerKm * 60).round();
-    final m = totalSec ~/ 60;
-    final s = totalSec % 60;
-    return '$m:${s.toString().padLeft(2, '0')}';
-  }
+  String _formatPace(double? minPerKm) => formatPace(minPerKm);
 
-  String _formatDuration(double? sec) {
-    if (sec == null || sec <= 0) return '-';
-    final total = sec.round();
-    final m = total ~/ 60;
-    final s = total % 60;
-    return '$m:${s.toString().padLeft(2, '0')}';
-  }
+  String _formatDuration(double? sec) => formatDurationSeconds(sec);
 
   List<Map<String, dynamic>> _splits = [];
   bool _loadingSplits = true;
@@ -357,7 +348,7 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
 
       if (distMm <= 0) continue;
 
-      if (splitStart == null) splitStart = startTime;
+      splitStart ??= startTime;
 
       final pointStart = DateTime.tryParse(startTime);
       final pointEnd = DateTime.tryParse(endTime);
@@ -407,23 +398,30 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
     if (_loadingRoute) {
       return const SizedBox(
         height: 280,
-        child: Center(child: CircularProgressIndicator()),
+        child: LoadingState(message: 'Route wird geladen'),
       );
     }
     if (_routeError != null) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 16),
-        child: Text('Route: $_routeError', style: const TextStyle(color: Colors.orange)),
+      return SizedBox(
+        height: 160,
+        child: ErrorState(
+          message: _routeError!,
+          onRetry: _loadRoute,
+        ),
       );
     }
     if (_routePoints.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 16),
-        child: Text('Keine GPS-Punkte gefunden'),
+      return const SizedBox(
+        height: 160,
+        child: EmptyState(
+          icon: Icons.location_off_outlined,
+          title: 'Keine GPS-Punkte gefunden',
+        ),
       );
     }
 
     final bounds = LatLngBounds.fromPoints(_routePoints);
+    final scheme = Theme.of(context).colorScheme;
 
     return SizedBox(
       height: 280,
@@ -444,7 +442,7 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
             polylines: [
               Polyline(
                 points: _routePoints,
-                color: Theme.of(context).colorScheme.primary,
+                color: scheme.primary,
                 strokeWidth: 4,
               ),
             ],
@@ -453,15 +451,15 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
             markers: [
               Marker(
                 point: _routePoints.first,
-                width: 20,
-                height: 20,
-                child: const Icon(Icons.flag, color: Colors.green, size: 20),
+                width: 28,
+                height: 28,
+                child: const Icon(Icons.flag, color: AppColors.start, size: 24),
               ),
               Marker(
                 point: _routePoints.last,
-                width: 20,
-                height: 20,
-                child: const Icon(Icons.flag, color: Colors.red, size: 20),
+                width: 28,
+                height: 28,
+                child: const Icon(Icons.flag, color: AppColors.finish, size: 24),
               ),
             ],
           ),
@@ -540,8 +538,12 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
       running += mm / 1000000.0;
       cumKm.add(running);
     }
-    while (cumKm.length > speedSpots.length) cumKm.removeAt(0);
-    while (cumKm.length < speedSpots.length) cumKm.insert(0, 0);
+    while (cumKm.length > speedSpots.length) {
+      cumKm.removeAt(0);
+    }
+    while (cumKm.length < speedSpots.length) {
+      cumKm.insert(0, 0);
+    }
 
     (double, double)? window;
     if (_trimAuto) {
@@ -587,103 +589,42 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
       return FlSpot(s.x, sMin + t * sRange);
     }).toList();
 
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    final charts = Theme.of(context).extension<AppChartColors>() ?? AppChartColors.dark;
+    final axis = text.labelSmall?.copyWith(color: scheme.onSurfaceVariant);
+    final grid = scheme.outlineVariant.withValues(alpha: 0.45);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (_hrDebug.isNotEmpty)
           Padding(
-            padding: const EdgeInsets.only(bottom: 4),
-            child: Text(_hrDebug, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+            padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+            child: Text(_hrDebug, style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),
           ),
-        Wrap(
-          spacing: 8,
-          runSpacing: 4,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Checkbox(
-                  value: _trimAuto,
-                  onChanged: (v) {
-                    setState(() {
-                      _trimAuto = v ?? false;
-                      if (_trimAuto) _trimManual = false;
-                    });
-                    _calculateSplits();
-                  },
-                ),
-                const Text('Auto'),
-              ],
-            ),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Checkbox(
-                  value: _trimManual,
-                  onChanged: (v) {
-                    setState(() {
-                      _trimManual = v ?? false;
-                      if (_trimManual) _trimAuto = false;
-                    });
-                    _calculateSplits();
-                  },
-                ),
-                const Text('Manuell'),
-              ],
-            ),
-            if (_trimManual) ...[
-              SegmentedButton<bool>(
-                segments: const [
-                  ButtonSegment(value: false, label: Text('Zeit')),
-                  ButtonSegment(value: true, label: Text('km')),
-                ],
-                selected: {_trimByKm},
-                onSelectionChanged: (s) => setState(() => _trimByKm = s.first),
-              ),
-              SizedBox(
-                width: 70,
-                child: TextField(
-                  controller: _trimStartCtrl,
-                  decoration: InputDecoration(
-                    labelText: 'Start',
-                    isDense: true,
-                    suffixText: _trimByKm ? 'km' : 'min',
-                  ),
-                  keyboardType: TextInputType.number,
-                  onChanged: (_) {
-                    setState(() {});
-                    _calculateSplits();
-                  },
-                ),
-              ),
-              SizedBox(
-                width: 70,
-                child: TextField(
-                  controller: _trimEndCtrl,
-                  decoration: InputDecoration(
-                    labelText: 'Ende',
-                    isDense: true,
-                    suffixText: _trimByKm ? 'km' : 'min',
-                  ),
-                  keyboardType: TextInputType.number,
-                  onChanged: (_) {
-                    setState(() {});
-                    _calculateSplits();
-                  },
-                ),
-              ),
-            ],
-            SegmentedButton<bool>(
-              segments: const [
-                ButtonSegment(value: false, label: Text('min/km')),
-                ButtonSegment(value: true, label: Text('km/h')),
-              ],
-              selected: {_showKmh},
-              onSelectionChanged: (s) => setState(() => _showKmh = s.first),
-            ),
-          ],
+        EffortControls(
+          trimAuto: _trimAuto,
+          trimManual: _trimManual,
+          trimByKm: _trimByKm,
+          showKmh: _showKmh,
+          startController: _trimStartCtrl,
+          endController: _trimEndCtrl,
+          onModeChanged: (mode) {
+            setState(() {
+              _trimAuto = mode == 'auto';
+              _trimManual = mode == 'manual';
+            });
+            _calculateSplits();
+          },
+          onTrimByKm: (value) => setState(() => _trimByKm = value),
+          onShowKmh: (value) => setState(() => _showKmh = value),
+          onManualEdit: (_) {
+            setState(() {});
+            _calculateSplits();
+          },
         ),
+        const SizedBox(height: AppSpacing.md),
         SizedBox(
           height: 280,
           child: LineChart(
@@ -692,17 +633,21 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
               maxX: maxX,
               minY: sMin,
               maxY: sMax,
-              gridData: const FlGridData(show: true),
+              gridData: FlGridData(
+                show: true,
+                getDrawingHorizontalLine: (_) => FlLine(color: grid, strokeWidth: 1),
+                getDrawingVerticalLine: (_) => FlLine(color: grid, strokeWidth: 1),
+              ),
               titlesData: FlTitlesData(
                 bottomTitles: AxisTitles(
                   sideTitles: SideTitles(
                     showTitles: true,
                     reservedSize: 32,
                     getTitlesWidget: (value, meta) {
-                      return Text('${value.toStringAsFixed(0)}', style: const TextStyle(fontSize: 10));
+                      return Text(value.toStringAsFixed(0), style: axis);
                     },
                   ),
-                  axisNameWidget: const Text('Minuten'),
+                  axisNameWidget: Text('Minuten', style: axis),
                 ),
                 leftTitles: AxisTitles(
                   sideTitles: SideTitles(
@@ -710,11 +655,11 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
                     reservedSize: 42,
                     getTitlesWidget: (value, meta) => Text(
                       value.toStringAsFixed(1),
-                      style: const TextStyle(fontSize: 10, color: Colors.blue),
+                      style: axis?.copyWith(color: charts.pace),
                     ),
                   ),
                   axisNameWidget: speedSpots.isNotEmpty
-                      ? Text(_showKmh ? 'km/h' : 'min/km', style: const TextStyle(color: Colors.blue, fontSize: 12))
+                      ? Text(_showKmh ? 'km/h' : 'min/km', style: text.labelMedium?.copyWith(color: charts.pace))
                       : null,
                 ),
                 rightTitles: AxisTitles(
@@ -724,31 +669,31 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
                     getTitlesWidget: (value, meta) {
                       final t = (value - sMin) / sRange;
                       final bpm = hrMin + t * hrRange;
-                      return Text(bpm.toStringAsFixed(0), style: const TextStyle(fontSize: 10, color: Colors.red));
+                      return Text(bpm.toStringAsFixed(0), style: axis?.copyWith(color: charts.heartRate));
                     },
                   ),
                   axisNameWidget: hrSpots.isNotEmpty
-                      ? const Text('bpm', style: TextStyle(color: Colors.red, fontSize: 12))
+                      ? Text('bpm', style: text.labelMedium?.copyWith(color: charts.heartRate))
                       : null,
                 ),
                 topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
               ),
-              borderData: FlBorderData(show: true),
+              borderData: FlBorderData(show: false),
               lineBarsData: [
                 if (speedSpots.isNotEmpty)
                   LineChartBarData(
                     spots: speedSpots,
                     isCurved: true,
-                    color: Colors.blue,
+                    color: charts.pace,
                     barWidth: 2.5,
                     dotData: const FlDotData(show: false),
-                    belowBarData: BarAreaData(show: true, color: Colors.blue.withOpacity(0.08)),
+                    belowBarData: BarAreaData(show: true, color: charts.pace.withValues(alpha: 0.12)),
                   ),
                 if (mappedHr.isNotEmpty)
                   LineChartBarData(
                     spots: mappedHr,
                     isCurved: true,
-                    color: Colors.red,
+                    color: charts.heartRate,
                     barWidth: 2.5,
                     dotData: const FlDotData(show: false),
                     belowBarData: BarAreaData(show: false),
@@ -764,82 +709,163 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final exercise = widget.exercisePoint['exercise'] as Map<String, dynamic>? ?? {};
-    final type = exercise['exerciseType'] ?? 'Unknown';
-    final name = exercise['displayName'] ?? '';
+    final type = (exercise['exerciseType'] ?? 'Unknown').toString();
+    final name = (exercise['displayName'] ?? '').toString();
     final interval = exercise['interval'] as Map<String, dynamic>? ?? {};
-    final start = interval['startTime'] ?? '';
-    final end = interval['endTime'] ?? '';
-    final activeDuration = exercise['activeDuration'] ?? '';
+    final start = (interval['startTime'] ?? '').toString();
+    final end = (interval['endTime'] ?? '').toString();
+    final activeDuration = exercise['activeDuration'];
     final metrics = exercise['metricsSummary'] as Map<String, dynamic>? ?? {};
     final distanceMm = metrics['distanceMillimeters'];
-    final distanceKm = distanceMm != null ? (distanceMm / 1000000).toStringAsFixed(2) : '-';
-    final avgHr = metrics['averageHeartRateBeatsPerMinute'] ?? '-';
-    final calories = metrics['caloriesKcal'] ?? '-';
+    final distanceKm = distanceMm is num ? (distanceMm / 1000000).toStringAsFixed(2) : '-';
+    final avgHr = metrics['averageHeartRateBeatsPerMinute'];
+    final calories = metrics['caloriesKcal'];
     final avgPace = metrics['averagePaceSecondsPerMeter'];
-    final paceMinKm = avgPace != null
-        ? (avgPace * 1000 / 60).toStringAsFixed(2)
-        : '-';
+    final paceLabel = avgPace is num ? formatPace(avgPace * 1000 / 60) : '-';
+    final hrLabel = avgHr is num ? formatCount(avgHr) : (avgHr ?? '-').toString();
+    final calLabel = calories is num ? formatCount(calories) : (calories ?? '-').toString();
+    final durationLabel = activeDuration is String
+        ? formatDurationRaw(activeDuration)
+        : (activeDuration ?? '-').toString();
+    final title = name.trim().isEmpty ? activityTypeLabel(type) : name;
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
 
     return Scaffold(
-      appBar: AppBar(title: Text('$type – $name')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Text('Start: $start', style: Theme.of(context).textTheme.titleMedium),
-          Text('Ende: $end'),
-          Text('Aktive Dauer: $activeDuration'),
-          const SizedBox(height: 8),
-          Text('Distanz: $distanceKm km'),
-          Text('Durchschn. HF: $avgHr bpm'),
-          if (_hrSource.isNotEmpty)
-            Text('HF-Quelle: $_hrSource', style: const TextStyle(fontSize: 12, color: Colors.grey)),
-          Text('Kalorien: $calories'),
-          Text('Durchschn. Pace: $paceMinKm min/km'),
-          const SizedBox(height: 16),
-          Text('Route', style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 8),
-          _buildMap(),
-          const SizedBox(height: 24),
-          Text('Tempo & Herzfrequenz (Rohdaten)', style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 8),
-          if (_loadingHr || _loadingSplits)
-            const Center(child: CircularProgressIndicator())
-          else
-            _buildRawChart(),
-          const SizedBox(height: 24),
-          Row(
+      appBar: AppBar(title: Text(title)),
+      body: Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: AppSpacing.contentMaxWidth),
+          child: ListView(
+            padding: const EdgeInsets.all(AppSpacing.lg),
             children: [
-              Text('Splits (alle $_splitDistanceKm km)', style: Theme.of(context).textTheme.titleLarge),
-              const Spacer(),
-              DropdownButton<double>(
-                value: _splitDistanceKm,
-                items: const [0.5, 1.0, 2.0, 5.0]
-                    .map((d) => DropdownMenuItem(value: d, child: Text('$d km')))
-                    .toList(),
-                onChanged: (v) {
-                  if (v != null) {
-                    setState(() => _splitDistanceKm = v);
-                    _calculateSplits();
-                  }
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(AppSpacing.lg),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(activityTypeLabel(type), style: text.labelLarge?.copyWith(color: scheme.primary)),
+                      const SizedBox(height: AppSpacing.xs),
+                      Text(formatRunTimestamp(start), style: text.titleLarge?.copyWith(fontWeight: FontWeight.w600)),
+                      const SizedBox(height: AppSpacing.lg),
+                      Row(
+                        children: [
+                          RunStat(value: distanceKm, unit: 'km', label: 'Distanz'),
+                          RunStat(value: paceLabel, unit: '/km', label: 'Pace'),
+                          RunStat(value: durationLabel, label: 'Zeit'),
+                        ],
+                      ),
+                      const SizedBox(height: AppSpacing.lg),
+                      Row(
+                        children: [
+                          RunStat(value: hrLabel, unit: 'bpm', label: 'Herzfrequenz'),
+                          RunStat(value: calLabel, unit: 'kcal', label: 'Kalorien'),
+                          const Spacer(),
+                        ],
+                      ),
+                      const SizedBox(height: AppSpacing.md),
+                      Text('Start  ${formatRunTimestamp(start)}', style: text.bodyMedium),
+                      Text('Ende  ${formatRunTimestamp(end)}', style: text.bodyMedium),
+                      if (_hrSource.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: AppSpacing.xs),
+                          child: Text(
+                            'HF-Quelle: $_hrSource',
+                            style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              Text('Route', style: text.titleLarge?.copyWith(fontWeight: FontWeight.w600)),
+              const SizedBox(height: AppSpacing.sm),
+              Card(child: _buildMap()),
+              const SizedBox(height: AppSpacing.xl),
+              Text(
+                'Tempo & Herzfrequenz',
+                style: text.titleLarge?.copyWith(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              if (_loadingHr || _loadingSplits)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: AppSpacing.xxl),
+                  child: LoadingState(message: 'Kurven werden geladen'),
+                )
+              else
+                SectionCard(child: _buildRawChart()),
+              const SizedBox(height: AppSpacing.xl),
+              Text('Splits', style: text.titleLarge?.copyWith(fontWeight: FontWeight.w600)),
+              const SizedBox(height: AppSpacing.xs),
+              Text(
+                'Abschnitte von $_splitDistanceKm km',
+                style: text.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+              ),
+              const SizedBox(height: AppSpacing.md),
+              SegmentedButton<double>(
+                showSelectedIcon: false,
+                segments: const [
+                  ButtonSegment(value: 0.5, label: Text('0,5')),
+                  ButtonSegment(value: 1.0, label: Text('1')),
+                  ButtonSegment(value: 2.0, label: Text('2')),
+                  ButtonSegment(value: 5.0, label: Text('5 km')),
+                ],
+                selected: {_splitDistanceKm},
+                onSelectionChanged: (selection) {
+                  setState(() => _splitDistanceKm = selection.first);
+                  _calculateSplits();
                 },
               ),
+              if (_splitError != null) ...[
+                const SizedBox(height: AppSpacing.md),
+                Text('Split-Fehler: $_splitError', style: text.bodyMedium?.copyWith(color: scheme.error)),
+              ],
+              if (_debugInfo.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: AppSpacing.sm),
+                  child: Text(_debugInfo, style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),
+                ),
+              const SizedBox(height: AppSpacing.md),
+              if (_splits.isEmpty && !_loadingSplits)
+                const EmptyState(
+                  icon: Icons.timer_outlined,
+                  title: 'Keine Splits',
+                  message: 'Für diese Distanz reichen die Punkte nicht.',
+                )
+              else
+                ..._splits.map((s) {
+                  final pace = _formatPace((s['paceMinKm'] as num?)?.toDouble());
+                  final kmh = (s['kmh'] as num?)?.toStringAsFixed(1) ?? '-';
+                  final dur = _formatDuration((s['durationSec'] as num?)?.toDouble());
+                  final dist = (s['distanceKm'] as num?)?.toStringAsFixed(1) ?? '-';
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                    child: Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(AppSpacing.lg),
+                        child: Row(
+                          children: [
+                            CircleAvatar(
+                              backgroundColor: scheme.secondaryContainer,
+                              foregroundColor: scheme.onSecondaryContainer,
+                              child: Text('${s['index']}', style: text.titleMedium),
+                            ),
+                            const SizedBox(width: AppSpacing.md),
+                            RunStat(value: pace, unit: '/km', label: '$dist km'),
+                            RunStat(value: kmh, unit: 'km/h', label: 'Tempo'),
+                            RunStat(value: dur, label: 'Zeit'),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                }),
             ],
           ),
-          if (_splitError != null)
-            Text('Split-Fehler: $_splitError', style: const TextStyle(color: Colors.orange)),
-          if (_debugInfo.isNotEmpty)
-            Text(_debugInfo, style: const TextStyle(fontSize: 12, color: Colors.grey)),
-          ..._splits.map((s) {
-            final pace = _formatPace((s['paceMinKm'] as num?)?.toDouble());
-            final kmh = (s['kmh'] as num?)?.toStringAsFixed(1) ?? '-';
-            final dur = _formatDuration((s['durationSec'] as num?)?.toDouble());
-            final dist = (s['distanceKm'] as num?)?.toStringAsFixed(1) ?? '-';
-            return ListTile(
-              title: Text('Split ${s['index']}  ($dist km)'),
-              subtitle: Text('$pace min/km · $kmh km/h · $dur'),
-            );
-          }),
-        ],
+        ),
       ),
     );
   }

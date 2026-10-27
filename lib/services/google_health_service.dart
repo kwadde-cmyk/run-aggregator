@@ -31,7 +31,7 @@ class GoogleHealthService {
     do {
       final query = {
         'pageSize': pageSize.toString(),
-        if (pageToken != null) 'pageToken': pageToken!,
+        if (pageToken != null) 'pageToken': pageToken,
       };
       final uri = Uri.parse(
         '$_baseUrl/users/me/dataTypes/exercise/dataPoints',
@@ -107,7 +107,7 @@ class GoogleHealthService {
       final query = {
         'pageSize': '500',
         'filter': filter,
-        if (pageToken != null) 'pageToken': pageToken!,
+        if (pageToken != null) 'pageToken': pageToken,
       };
       final uri = Uri.parse(
         '$_baseUrl/users/me/dataTypes/distance/dataPoints',
@@ -193,7 +193,7 @@ class GoogleHealthService {
       final query = {
         'pageSize': '1000',
         'filter': filter,
-        if (pageToken != null) 'pageToken': pageToken!,
+        if (pageToken != null) 'pageToken': pageToken,
       };
       final uri = Uri.parse(
         '$_baseUrl/users/me/dataTypes/heart-rate/dataPoints',
