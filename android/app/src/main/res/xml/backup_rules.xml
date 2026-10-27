@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  flutter_secure_storage keeps its ciphertext in these SharedPreferences
+  files and the wrapping key in the Android Keystore. Auto Backup restores
+  the files without the Keystore key, so the next launch cannot decrypt the
+  Google refresh token (InvalidKeyException / BadPaddingException) and the
+  user looks logged out. Leave the files out of backup and device transfer.
+-->
+<full-backup-content>
+    <exclude domain="sharedpref" path="FlutterSecureStorage.xml"/>
+    <exclude domain="sharedpref" path="FlutterSecureKeyStorage.xml"/>
+</full-backup-content>
