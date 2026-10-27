@@ -1,8 +1,11 @@
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../format/run_format.dart';
 import '../services/google_health_service.dart';
 import '../services/weather_service.dart';
+import '../theme/app_theme.dart';
+import '../widgets/run_widgets.dart';
 import 'exercise_detail_screen.dart';
 
 class CompareScreen extends StatefulWidget {
@@ -30,44 +33,14 @@ class _CompareScreenState extends State<CompareScreen> {
   final _trimStartCtrl = TextEditingController(text: '0');
   final _trimEndCtrl = TextEditingController(text: '0');
 
-  static const _colors = [
-    Colors.blue,
-    Colors.red,
-    Colors.green,
-    Colors.orange,
-    Colors.purple,
-    Colors.teal,
-    Colors.amber,
-    Colors.pink,
-  ];
-
-
-  String _formatPace(double? minPerKm) {
-    if (minPerKm == null || minPerKm <= 0) return '-';
-    final totalSec = (minPerKm * 60).round();
-    final m = totalSec ~/ 60;
-    final s = totalSec % 60;
-    return '$m:${s.toString().padLeft(2, '0')}';
+  Color _seriesColor(int index) {
+    final palette = Theme.of(context).extension<AppChartColors>() ?? AppChartColors.dark;
+    return palette.series[index % palette.series.length];
   }
 
-  String _formatDuration(String? raw) {
-    if (raw == null || raw.isEmpty || raw == '-') return '-';
-    final cleaned = raw.toLowerCase().trim();
-    double? totalSec;
-    if (cleaned.endsWith('s') && !cleaned.contains('min')) {
-      totalSec = double.tryParse(cleaned.replaceAll('s', '').trim());
-    } else if (cleaned.contains('min')) {
-      final mins = double.tryParse(cleaned.replaceAll('min', '').trim());
-      if (mins != null) totalSec = mins * 60;
-    } else {
-      totalSec = double.tryParse(cleaned);
-    }
-    if (totalSec == null || totalSec <= 0) return raw;
-    final secs = totalSec.round();
-    final m = secs ~/ 60;
-    final s = secs % 60;
-    return '$m:${s.toString().padLeft(2, '0')}';
-  }
+  String _formatPace(double? minPerKm) => formatPace(minPerKm);
+
+  String _formatDuration(String? raw) => formatDurationRaw(raw);
 
   double? _toDouble(dynamic v) {
     if (v is num) return v.toDouble();
@@ -252,7 +225,16 @@ class _CompareScreenState extends State<CompareScreen> {
   }
 
   Widget _buildOverlayChart(List<List<FlSpot>> series, String yLabel, {bool isHr = false}) {
-    if (series.every((s) => s.isEmpty)) return const Text('Keine Daten');
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    final axis = text.labelSmall?.copyWith(color: scheme.onSurfaceVariant);
+    if (series.every((s) => s.isEmpty)) {
+      return const EmptyState(
+        icon: Icons.show_chart,
+        title: 'Keine Daten',
+        message: 'Für diese Läufe liegen keine Kurvenpunkte vor.',
+      );
+    }
 
     final allX = series.expand((s) => s.map((p) => p.x));
     final allY = series.expand((s) => s.map((p) => p.y));
@@ -261,16 +243,17 @@ class _CompareScreenState extends State<CompareScreen> {
     final minY = allY.isEmpty ? 0.0 : allY.reduce((a, b) => a < b ? a : b);
     final maxY = allY.isEmpty ? 1.0 : allY.reduce((a, b) => a > b ? a : b);
     final pad = (maxY - minY) * 0.1;
+    final grid = scheme.outlineVariant.withValues(alpha: 0.45);
 
     final bars = <LineChartBarData>[];
     for (var i = 0; i < series.length; i++) {
       if (series[i].isEmpty) continue;
-      final color = _colors[i % _colors.length];
+      final color = _seriesColor(i);
       bars.add(LineChartBarData(
         spots: series[i],
         isCurved: true,
-        color: color.withOpacity(0.55),
-        barWidth: 2,
+        color: color,
+        barWidth: 2.5,
         dotData: const FlDotData(show: false),
       ));
     }
@@ -280,20 +263,25 @@ class _CompareScreenState extends State<CompareScreen> {
       children: [
         Wrap(
           spacing: 12,
+          runSpacing: 8,
           children: List.generate(series.length, (i) {
-            final color = _colors[i % _colors.length];
-            final temp = i < _temps.length && _temps[i] != null ? ' (${_temps[i]!.toStringAsFixed(0)}°C)' : '';
+            final color = _seriesColor(i);
+            final temp = i < _temps.length && _temps[i] != null ? ' · ${_temps[i]!.toStringAsFixed(0)}°C' : '';
             return Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Container(width: 12, height: 12, color: color.withOpacity(0.7)),
-                const SizedBox(width: 4),
-                Text('${_labels[i]}$temp', style: const TextStyle(fontSize: 12)),
+                Container(
+                  width: 12,
+                  height: 12,
+                  decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(4)),
+                ),
+                const SizedBox(width: 6),
+                Text('${_labels[i]}$temp', style: text.labelLarge),
               ],
             );
           }),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: AppSpacing.md),
         SizedBox(
           height: 260,
           child: LineChart(
@@ -302,15 +290,19 @@ class _CompareScreenState extends State<CompareScreen> {
               maxX: maxX,
               minY: (minY - pad).clamp(0, double.infinity),
               maxY: maxY + pad,
-              gridData: const FlGridData(show: true),
+              gridData: FlGridData(
+                show: true,
+                getDrawingHorizontalLine: (_) => FlLine(color: grid, strokeWidth: 1),
+                getDrawingVerticalLine: (_) => FlLine(color: grid, strokeWidth: 1),
+              ),
               titlesData: FlTitlesData(
                 bottomTitles: AxisTitles(
                   sideTitles: SideTitles(
                     showTitles: true,
                     reservedSize: 28,
-                    getTitlesWidget: (v, _) => Text('${v.toStringAsFixed(0)}', style: const TextStyle(fontSize: 10)),
+                    getTitlesWidget: (v, _) => Text(v.toStringAsFixed(0), style: axis),
                   ),
-                  axisNameWidget: const Text('Minuten'),
+                  axisNameWidget: Text('Minuten', style: axis),
                 ),
                 leftTitles: AxisTitles(
                   sideTitles: SideTitles(
@@ -318,15 +310,15 @@ class _CompareScreenState extends State<CompareScreen> {
                     reservedSize: 36,
                     getTitlesWidget: (v, _) => Text(
                       isHr ? v.toStringAsFixed(0) : v.toStringAsFixed(1),
-                      style: const TextStyle(fontSize: 10),
+                      style: axis,
                     ),
                   ),
-                  axisNameWidget: Text(yLabel, style: const TextStyle(fontSize: 12)),
+                  axisNameWidget: Text(yLabel, style: axis),
                 ),
                 rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                 topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
               ),
-              borderData: FlBorderData(show: true),
+              borderData: FlBorderData(show: false),
               lineBarsData: bars,
             ),
           ),
@@ -412,210 +404,168 @@ class _CompareScreenState extends State<CompareScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
     return Scaffold(
       appBar: AppBar(title: Text('Vergleich (${widget.exercises.length})')),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                Column(
-                  children: widget.exercises.asMap().entries.map((entry) {
-                    final idx = entry.key;
-                    final item = entry.value;
-                    final exercise = item['exercise'] as Map<String, dynamic>? ?? {};
-                    final interval = exercise['interval'] as Map<String, dynamic>? ?? {};
-                    final metrics = exercise['metricsSummary'] as Map<String, dynamic>? ?? {};
+          ? const LoadingState(message: 'Vergleich wird geladen')
+          : Align(
+              alignment: Alignment.topCenter,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: AppSpacing.contentMaxWidth),
+                child: ListView(
+                  padding: const EdgeInsets.all(AppSpacing.lg),
+                  children: [
+                    Text(
+                      'Tipp: Eine Karte antippen, um den Lauf zu öffnen.',
+                      style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                    ),
+                    const SizedBox(height: AppSpacing.md),
+                    ...widget.exercises.asMap().entries.map((entry) {
+                      final idx = entry.key;
+                      final item = entry.value;
+                      final exercise = item['exercise'] as Map<String, dynamic>? ?? {};
+                      final interval = exercise['interval'] as Map<String, dynamic>? ?? {};
+                      final metrics = exercise['metricsSummary'] as Map<String, dynamic>? ?? {};
+                      final name = (exercise['displayName'] ?? '').toString();
 
-                    final start = interval['startTime'] as String? ?? '';
-                    final startDt = DateTime.tryParse(start);
-                    final dateStr = startDt != null
-                        ? '${startDt.day}.${startDt.month}. ${startDt.hour}:${startDt.minute.toString().padLeft(2, '0')}'
-                        : start;
+                      final start = interval['startTime'] as String? ?? '';
+                      final dateStr = formatRunTimestamp(start);
+                      final adj = _adjustedMetrics(idx);
 
-                    final adj = _adjustedMetrics(idx);
+                      String distKm;
+                      String duration;
+                      String hrStr;
+                      String paceStr;
 
-                    String distKm;
-                    String duration;
-                    String hrStr;
-                    String paceStr;
+                      if (adj != null) {
+                        distKm = adj.distKm != null ? adj.distKm!.toStringAsFixed(2) : '-';
+                        duration = adj.durationMin != null
+                            ? _formatDuration('${(adj.durationMin! * 60).round()}s')
+                            : '-';
+                        hrStr = adj.avgHr != null ? adj.avgHr!.toStringAsFixed(0) : '-';
+                        paceStr = _formatPace(adj.avgPace);
+                      } else {
+                        final distMm = _toDouble(metrics['distanceMillimeters']);
+                        distKm = distMm != null ? (distMm / 1000000).toStringAsFixed(2) : '-';
+                        duration = _formatDuration(exercise['activeDuration'] as String?);
+                        final avgHr = _toDouble(metrics['averageHeartRateBeatsPerMinute']);
+                        hrStr = avgHr != null ? avgHr.toStringAsFixed(0) : '-';
+                        final pace = _toDouble(metrics['averagePaceSecondsPerMeter']);
+                        paceStr = _formatPace(pace != null ? pace * 1000 / 60 : null);
+                      }
 
-                    if (adj != null) {
-                      distKm = adj.distKm != null ? adj.distKm!.toStringAsFixed(2) : '-';
-                      duration = adj.durationMin != null
-                          ? _formatDuration('${(adj.durationMin! * 60).round()}s')
-                          : '-';
-                      hrStr = adj.avgHr != null ? adj.avgHr!.toStringAsFixed(0) : '-';
-                      paceStr = _formatPace(adj.avgPace);
-                    } else {
-                      final distMm = _toDouble(metrics['distanceMillimeters']);
-                      distKm = distMm != null ? (distMm / 1000000).toStringAsFixed(2) : '-';
-                      duration = _formatDuration(exercise['activeDuration'] as String?);
-                      final avgHr = _toDouble(metrics['averageHeartRateBeatsPerMinute']);
-                      hrStr = avgHr != null ? avgHr.toStringAsFixed(0) : '-';
-                      final pace = _toDouble(metrics['averagePaceSecondsPerMeter']);
-                      paceStr = _formatPace(pace != null ? pace * 1000 / 60 : null);
-                    }
+                      final cal = _toDouble(metrics['caloriesKcal']);
+                      final calStr = cal != null ? cal.toStringAsFixed(0) : '-';
+                      final temp = idx < _temps.length ? _temps[idx] : null;
+                      final color = _seriesColor(idx);
 
-                    final cal = _toDouble(metrics['caloriesKcal']);
-                    final calStr = cal != null ? cal.toStringAsFixed(0) : '-';
-                    final temp = idx < _temps.length ? _temps[idx] : null;
-                    final tempStr = temp != null ? '${temp.toStringAsFixed(0)}°C' : '-';
-                    final color = _colors[idx % _colors.length];
-
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: Material(
-                        color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(0.5),
-                        borderRadius: BorderRadius.circular(16),
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(16),
-                          onTap: () {
-                            Navigator.of(context).push(
-                              MaterialPageRoute(builder: (_) => ExerciseDetailScreen(exercisePoint: item)),
-                            );
-                          },
-                          child: Padding(
-                            padding: const EdgeInsets.all(14),
-                            child: Row(
-                              children: [
-                                Container(
-                                  width: 6,
-                                  height: 48,
-                                  decoration: BoxDecoration(
-                                    color: color,
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: AppSpacing.md),
+                        child: Card(
+                          child: InkWell(
+                            onTap: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(builder: (_) => ExerciseDetailScreen(exercisePoint: item)),
+                              );
+                            },
+                            child: Padding(
+                              padding: const EdgeInsets.all(AppSpacing.lg),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
                                     children: [
-                                      Text(dateStr, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
-                                      const SizedBox(height: 4),
-                                      Text('$distKm km  ·  $duration  ·  $paceStr /km', style: Theme.of(context).textTheme.bodyMedium),
-                                      const SizedBox(height: 2),
-                                      Text('$hrStr bpm  ·  $tempStr  ·  $calStr kcal', style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                                      Container(
+                                        width: 6,
+                                        height: 36,
+                                        decoration: BoxDecoration(
+                                          color: color,
+                                          borderRadius: BorderRadius.circular(4),
+                                        ),
+                                      ),
+                                      const SizedBox(width: AppSpacing.md),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(dateStr, style: text.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
+                                            if (name.isNotEmpty)
+                                              Text(name, style: text.bodyMedium?.copyWith(color: scheme.onSurfaceVariant)),
+                                          ],
+                                        ),
+                                      ),
+                                      if (temp != null)
+                                        Text(
+                                          '${temp.toStringAsFixed(0)}°C',
+                                          style: text.labelLarge?.copyWith(color: scheme.onSurfaceVariant),
+                                        ),
+                                      Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
                                     ],
                                   ),
-                                ),
-                                const Icon(Icons.chevron_right, size: 20),
-                              ],
+                                  const SizedBox(height: AppSpacing.md),
+                                  Row(
+                                    children: [
+                                      RunStat(value: distKm, unit: 'km', label: 'Distanz'),
+                                      RunStat(value: paceStr, unit: '/km', label: 'Pace'),
+                                      RunStat(value: duration, label: 'Zeit'),
+                                    ],
+                                  ),
+                                  const SizedBox(height: AppSpacing.sm),
+                                  Text(
+                                    '$hrStr bpm · $calStr kcal',
+                                    style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                    );
-                  }).toList(),
-                ),
-                const SizedBox(height: 16),
-                Text('Warmup / Cooldown', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
-                const SizedBox(height: 4),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 4,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Checkbox(
-                          value: _trimAuto,
-                          onChanged: (v) => setState(() {
-                            _trimAuto = v ?? false;
-                            if (_trimAuto) _trimManual = false;
-                            _savePrefs();
-                          }),
-                        ),
-                        const Text('Auto'),
-                      ],
-                    ),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Checkbox(
-                          value: _trimManual,
-                          onChanged: (v) => setState(() {
-                            _trimManual = v ?? false;
-                            if (_trimManual) _trimAuto = false;
-                            _savePrefs();
-                          }),
-                        ),
-                        const Text('Manuell'),
-                      ],
-                    ),
-                    if (_trimManual) ...[
-                      SegmentedButton<bool>(
-                        segments: const [
-                          ButtonSegment(value: false, label: Text('Zeit')),
-                          ButtonSegment(value: true, label: Text('km')),
-                        ],
-                        selected: {_trimByKm},
-                        onSelectionChanged: (s) => setState(() {
-                          _trimByKm = s.first;
+                      );
+                    }),
+                    const SizedBox(height: AppSpacing.sm),
+                    SectionCard(
+                      padding: const EdgeInsets.all(AppSpacing.lg),
+                      child: EffortControls(
+                        trimAuto: _trimAuto,
+                        trimManual: _trimManual,
+                        trimByKm: _trimByKm,
+                        showKmh: _showKmh,
+                        startController: _trimStartCtrl,
+                        endController: _trimEndCtrl,
+                        onModeChanged: (mode) => setState(() {
+                          _trimAuto = mode == 'auto';
+                          _trimManual = mode == 'manual';
                           _savePrefs();
                         }),
-                      ),
-                      SizedBox(
-                        width: 70,
-                        child: TextField(
-                          controller: _trimStartCtrl,
-                          decoration: InputDecoration(
-                            labelText: 'Start',
-                            isDense: true,
-                            suffixText: _trimByKm ? 'km' : 'min',
-                          ),
-                          keyboardType: TextInputType.number,
-                          onChanged: (_) {
+                        onTrimByKm: (value) => setState(() {
+                          _trimByKm = value;
+                          _savePrefs();
+                        }),
+                        onShowKmh: (value) => setState(() {
+                          _showKmh = value;
+                          _savePrefs();
+                        }),
+                        onManualEdit: (_) {
                           setState(() {});
                           _savePrefs();
                         },
-                        ),
                       ),
-                      SizedBox(
-                        width: 70,
-                        child: TextField(
-                          controller: _trimEndCtrl,
-                          decoration: InputDecoration(
-                            labelText: 'Ende',
-                            isDense: true,
-                            suffixText: _trimByKm ? 'km' : 'min',
-                          ),
-                          keyboardType: TextInputType.number,
-                          onChanged: (_) {
-                          setState(() {});
-                          _savePrefs();
-                        },
-                        ),
-                      ),
-                    ],
-                    const SizedBox(width: 12),
-                    SegmentedButton<bool>(
-                      segments: const [
-                        ButtonSegment(value: false, label: Text('min/km')),
-                        ButtonSegment(value: true, label: Text('km/h')),
-                      ],
-                      selected: {_showKmh},
-                      onSelectionChanged: (s) => setState(() {
-                        _showKmh = s.first;
-                        _savePrefs();
-                      }),
+                    ),
+                    const SizedBox(height: AppSpacing.lg),
+                    SectionCard(
+                      title: _showKmh ? 'Geschwindigkeit' : 'Pace-Verlauf',
+                      child: _buildOverlayChart(_displayPace, _showKmh ? 'km/h' : 'min/km'),
+                    ),
+                    const SizedBox(height: AppSpacing.lg),
+                    SectionCard(
+                      title: 'HF-Verlauf',
+                      child: _buildOverlayChart(_displayHr, 'bpm', isHr: true),
                     ),
                   ],
                 ),
-                const SizedBox(height: 16),
-                Text(_showKmh ? 'Geschwindigkeit' : 'Pace-Verlauf', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600)),
-                const SizedBox(height: 8),
-                _buildOverlayChart(_displayPace, _showKmh ? 'km/h' : 'min/km'),
-                const SizedBox(height: 24),
-                Text('HF-Verlauf', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600)),
-                const SizedBox(height: 8),
-                _buildOverlayChart(_displayHr, 'bpm', isHr: true),
-                const SizedBox(height: 16),
-                Text('Tipp: Datum antippen, um den Lauf zu öffnen.',
-                    style: Theme.of(context).textTheme.bodySmall),
-              ],
+              ),
             ),
     );
   }

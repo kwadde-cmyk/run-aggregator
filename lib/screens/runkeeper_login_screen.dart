@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import '../services/runkeeper_service.dart';
+import '../theme/app_theme.dart';
 
 class RunkeeperLoginScreen extends StatefulWidget {
   const RunkeeperLoginScreen({super.key});
@@ -32,28 +33,57 @@ class _RunkeeperLoginScreenState extends State<RunkeeperLoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Runkeeper Login'),
+        title: const Text('Runkeeper'),
         actions: [
-          TextButton(
-            onPressed: _captureCookies,
-            child: const Text('Fertig'),
+          Padding(
+            padding: const EdgeInsets.only(right: AppSpacing.md),
+            child: FilledButton(
+              onPressed: _captureCookies,
+              child: const Text('Fertig'),
+            ),
           ),
         ],
       ),
-      body: InAppWebView(
-        initialUrlRequest: URLRequest(
-          url: WebUri('https://runkeeper.com/login'),
-        ),
-        onWebViewCreated: (c) => _controller = c,
-        onLoadStop: (controller, url) async {
-          // Auto-capture once we reach a logged-in page
-          if (url != null && !url.toString().contains('/login')) {
-            await Future.delayed(const Duration(seconds: 1));
-            await _captureCookies();
-          }
-        },
+      body: Column(
+        children: [
+          Material(
+            color: scheme.surfaceContainerHigh,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.md),
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline, color: scheme.primary),
+                  const SizedBox(width: AppSpacing.md),
+                  Expanded(
+                    child: Text(
+                      'Nach dem Login auf Fertig tippen. Die Sitzung wird gespeichert.',
+                      style: text.bodyMedium,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Expanded(
+            child: InAppWebView(
+              initialUrlRequest: URLRequest(
+                url: WebUri('https://runkeeper.com/login'),
+              ),
+              onWebViewCreated: (c) => _controller = c,
+              onLoadStop: (controller, url) async {
+                // Auto-capture once we reach a logged-in page
+                if (url != null && !url.toString().contains('/login')) {
+                  await Future.delayed(const Duration(seconds: 1));
+                  await _captureCookies();
+                }
+              },
+            ),
+          ),
+        ],
       ),
     );
   }

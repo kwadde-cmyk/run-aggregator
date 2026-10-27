@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/google_health_auth.dart';
+import '../theme/app_theme.dart';
+import '../widgets/run_widgets.dart';
 import 'home_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -30,32 +32,85 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Run Aggregator')),
-      body: Center(
+      body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.all(24),
+          padding: const EdgeInsets.all(AppSpacing.xl),
           child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Text(
-                'Mit Google Health anmelden',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              const Align(
+                alignment: Alignment.centerRight,
+                child: ThemeModeButton(),
               ),
-              const SizedBox(height: 24),
-              if (_loading)
-                const CircularProgressIndicator()
-              else
-                ElevatedButton.icon(
-                  onPressed: _loginGoogleHealth,
-                  icon: const Icon(Icons.login),
-                  label: const Text('Google Health Login'),
+              const Spacer(),
+              Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 420),
+                  child: Column(
+                    children: [
+                      Container(
+                        width: 88,
+                        height: 88,
+                        decoration: BoxDecoration(
+                          color: scheme.primaryContainer,
+                          borderRadius: BorderRadius.circular(24),
+                        ),
+                        child: Icon(
+                          Icons.directions_run,
+                          size: 48,
+                          color: scheme.onPrimaryContainer,
+                        ),
+                      ),
+                      const SizedBox(height: AppSpacing.xl),
+                      Text(
+                        'Run Aggregator',
+                        style: text.headlineMedium?.copyWith(fontWeight: FontWeight.w600),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: AppSpacing.sm),
+                      Text(
+                        'Läufe aus Google Health vergleichen, filtern und auswerten.',
+                        style: text.bodyLarge?.copyWith(color: scheme.onSurfaceVariant),
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ),
                 ),
-              const SizedBox(height: 16),
-              const Text(
-                'Runkeeper-Login kommt als Nächstes.',
-                style: TextStyle(color: Colors.grey),
               ),
+              const Spacer(),
+              Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 420),
+                  child: Column(
+                    children: [
+                      if (_loading)
+                        const Padding(
+                          padding: EdgeInsets.all(AppSpacing.md),
+                          child: CircularProgressIndicator(),
+                        )
+                      else
+                        SizedBox(
+                          width: double.infinity,
+                          child: FilledButton.icon(
+                            onPressed: _loginGoogleHealth,
+                            icon: const Icon(Icons.login),
+                            label: const Text('Mit Google Health anmelden'),
+                          ),
+                        ),
+                      const SizedBox(height: AppSpacing.lg),
+                      Text(
+                        'Runkeeper-Login kommt als Nächstes.',
+                        style: text.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: AppSpacing.sm),
             ],
           ),
         ),

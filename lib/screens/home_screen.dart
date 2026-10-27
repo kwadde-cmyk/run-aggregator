@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import '../format/run_format.dart';
 import '../services/google_health_auth.dart';
 import '../services/google_health_service.dart';
 import '../services/runkeeper_service.dart';
 import '../services/weather_service.dart';
+import '../theme/app_theme.dart';
+import '../widgets/run_widgets.dart';
 import 'login_screen.dart';
 import 'exercise_detail_screen.dart';
 import 'runkeeper_login_screen.dart';
@@ -21,6 +24,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _loading = true;
   String? _error;
   bool _runkeeperBusy = false;
+  int _section = 0;
 
   // Filters
   int? _weekday;
@@ -172,36 +176,30 @@ class _HomeScreenState extends State<HomeScreen> {
     }).toList();
   }
 
-  void _openFilters() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      builder: (ctx) => _FilterSheet(
-        weekday: _weekday,
-        minDist: _minDistKm,
-        maxDist: _maxDistKm,
-        minHr: _minAvgHr,
-        maxHr: _maxAvgHr,
-        minPace: _minPace,
-        maxPace: _maxPace,
-        minTemp: _minTemp,
-        maxTemp: _maxTemp,
-        onApply: (w, minD, maxD, minH, maxH, minP, maxP, minT, maxT) {
-          setState(() {
-            _weekday = w;
-            _minDistKm = minD;
-            _maxDistKm = maxD;
-            _minAvgHr = minH;
-            _maxAvgHr = maxH;
-            _minPace = minP;
-            _maxPace = maxP;
-            _minTemp = minT;
-            _maxTemp = maxT;
-            _selected.clear();
-          });
-        },
-      ),
-    );
+  bool get _hasFilters =>
+      _weekday != null ||
+      _minDistKm != null ||
+      _maxDistKm != null ||
+      _minAvgHr != null ||
+      _maxAvgHr != null ||
+      _minPace != null ||
+      _maxPace != null ||
+      _minTemp != null ||
+      _maxTemp != null;
+
+  void _clearFilters() {
+    setState(() {
+      _weekday = null;
+      _minDistKm = null;
+      _maxDistKm = null;
+      _minAvgHr = null;
+      _maxAvgHr = null;
+      _minPace = null;
+      _maxPace = null;
+      _minTemp = null;
+      _maxTemp = null;
+      _selected.clear();
+    });
   }
 
   void _compare() {
@@ -235,123 +233,517 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final filtered = _filtered;
-    final hasFilters = _weekday != null || _minDistKm != null || _maxDistKm != null ||
-        _minAvgHr != null || _maxAvgHr != null || _minPace != null || _maxPace != null ||
-        _minTemp != null || _maxTemp != null;
+    final wide = MediaQuery.sizeOf(context).width >= AppSpacing.wideBreakpoint;
+    final body = _sectionBody();
+    if (!wide) {
+      return Scaffold(
+        appBar: _appBar(),
+        body: body,
+        floatingActionButton: _section == 0 ? _fab() : null,
+        bottomNavigationBar: NavigationBar(
+          selectedIndex: _section,
+          onDestinationSelected: (index) => setState(() => _section = index),
+          destinations: [
+            const NavigationDestination(
+              icon: Icon(Icons.directions_run_outlined),
+              selectedIcon: Icon(Icons.directions_run),
+              label: 'Läufe',
+            ),
+            NavigationDestination(
+              icon: _filterIcon(selected: false),
+              selectedIcon: _filterIcon(selected: true),
+              label: 'Filter',
+            ),
+            const NavigationDestination(
+              icon: Icon(Icons.more_horiz),
+              selectedIcon: Icon(Icons.more_horiz),
+              label: 'Mehr',
+            ),
+          ],
+        ),
+      );
+    }
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Run Aggregator'),
-        actions: [
-          if (_runkeeperBusy)
-            const Padding(
-              padding: EdgeInsets.all(12),
-              child: SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2),
+      body: Row(
+        children: [
+          NavigationRail(
+            selectedIndex: _section,
+            onDestinationSelected: (index) => setState(() => _section = index),
+            labelType: NavigationRailLabelType.all,
+            groupAlignment: -0.85,
+            destinations: [
+              const NavigationRailDestination(
+                icon: Icon(Icons.directions_run_outlined),
+                selectedIcon: Icon(Icons.directions_run),
+                label: Text('Läufe'),
               ),
+              NavigationRailDestination(
+                icon: _filterIcon(selected: false),
+                selectedIcon: _filterIcon(selected: true),
+                label: const Text('Filter'),
+              ),
+              const NavigationRailDestination(
+                icon: Icon(Icons.more_horiz),
+                selectedIcon: Icon(Icons.more_horiz),
+                label: Text('Mehr'),
+              ),
+            ],
+          ),
+          const VerticalDivider(width: 1),
+          Expanded(
+            child: Scaffold(
+              appBar: _appBar(),
+              body: body,
+              floatingActionButton: _section == 0 ? _fab() : null,
             ),
-          IconButton(
-            icon: Icon(Icons.filter_list, color: hasFilters ? Colors.blue : null),
-            tooltip: 'Filter',
-            onPressed: _openFilters,
-          ),
-          IconButton(
-            icon: const Icon(Icons.directions_run),
-            tooltip: 'Runkeeper erzwingen',
-            onPressed: _runkeeperBusy ? null : () => _checkRunkeeper(force: true),
-          ),
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            tooltip: 'Google aktualisieren',
-            onPressed: () => _loadExercises(forceRefresh: true),
-          ),
-          IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: _logout,
           ),
         ],
       ),
-      floatingActionButton: _selected.length >= 2
-          ? FloatingActionButton.extended(
-              onPressed: _compare,
-              icon: const Icon(Icons.compare_arrows),
-              label: Text('Vergleichen (${_selected.length})'),
-            )
-          : FloatingActionButton.extended(
-              onPressed: _openRunkeeperLogin,
-              icon: const Icon(Icons.login),
-              label: const Text('Runkeeper'),
+    );
+  }
+
+  AppBar _appBar() {
+    const titles = ['Run Aggregator', 'Filter', 'Mehr'];
+    return AppBar(
+      title: Text(titles[_section]),
+      actions: [
+        if (_section == 0 && _runkeeperBusy)
+          const Padding(
+            padding: EdgeInsets.all(16),
+            child: SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
             ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _error != null
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
+          ),
+        if (_section == 0)
+          IconButton(
+            tooltip: 'Google aktualisieren',
+            onPressed: () => _loadExercises(forceRefresh: true),
+            icon: const Icon(Icons.refresh),
+          ),
+      ],
+    );
+  }
+
+  Widget _filterIcon({required bool selected}) {
+    return Badge(
+      isLabelVisible: _hasFilters,
+      smallSize: 8,
+      child: Icon(selected ? Icons.tune : Icons.tune_outlined),
+    );
+  }
+
+  Widget? _fab() {
+    if (_selected.length >= 2) {
+      return FloatingActionButton.extended(
+        onPressed: _compare,
+        icon: const Icon(Icons.compare_arrows),
+        label: Text('Vergleichen (${_selected.length})'),
+      );
+    }
+    return FloatingActionButton.extended(
+      onPressed: _openRunkeeperLogin,
+      icon: const Icon(Icons.login),
+      label: const Text('Runkeeper'),
+    );
+  }
+
+  Widget _sectionBody() {
+    return switch (_section) {
+      1 => _FilterSheet(
+          weekday: _weekday,
+          minDist: _minDistKm,
+          maxDist: _maxDistKm,
+          minHr: _minAvgHr,
+          maxHr: _maxAvgHr,
+          minPace: _minPace,
+          maxPace: _maxPace,
+          minTemp: _minTemp,
+          maxTemp: _maxTemp,
+          onApply: (w, minD, maxD, minH, maxH, minP, maxP, minT, maxT) {
+            setState(() {
+              _weekday = w;
+              _minDistKm = minD;
+              _maxDistKm = maxD;
+              _minAvgHr = minH;
+              _maxAvgHr = maxH;
+              _minPace = minP;
+              _maxPace = maxP;
+              _minTemp = minT;
+              _maxTemp = maxT;
+              _selected.clear();
+              _section = 0;
+            });
+          },
+        ),
+      2 => _MorePage(
+          runkeeperBusy: _runkeeperBusy,
+          onRefresh: () => _loadExercises(forceRefresh: true),
+          onRunkeeperLogin: _openRunkeeperLogin,
+          onRunkeeperSync: _runkeeperBusy ? null : () => _checkRunkeeper(force: true),
+          onLogout: _logout,
+        ),
+      _ => _runList(),
+    };
+  }
+
+  Widget _runList() {
+    if (_loading) {
+      return const LoadingState(message: 'Läufe werden geladen');
+    }
+    if (_error != null) {
+      return ErrorState(
+        message: _error!,
+        onRetry: () => _loadExercises(forceRefresh: true),
+      );
+    }
+
+    final filtered = _filtered;
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: AppSpacing.contentMaxWidth),
+        child: RefreshIndicator(
+          onRefresh: () => _loadExercises(forceRefresh: true),
+          child: CustomScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            slivers: [
+              if (filtered.isNotEmpty) SliverToBoxAdapter(child: _summary(filtered)),
+              if (_hasFilters) SliverToBoxAdapter(child: _filterBanner()),
+              if (_selected.isNotEmpty) SliverToBoxAdapter(child: _selectionBanner()),
+              if (filtered.isEmpty)
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: EmptyState(
+                    icon: _hasFilters ? Icons.filter_alt_off : Icons.directions_run,
+                    title: _hasFilters ? 'Keine Läufe passen zu den Filtern' : 'Keine Läufe gefunden',
+                    message: _hasFilters
+                        ? 'Passe die Filter an oder setze sie zurück.'
+                        : 'Ziehe zum Aktualisieren oder melde Runkeeper an.',
+                    action: _hasFilters
+                        ? FilledButton.tonal(
+                            onPressed: _clearFilters,
+                            child: const Text('Filter zurücksetzen'),
+                          )
+                        : null,
+                  ),
+                )
+              else
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.xs, AppSpacing.lg, 112),
+                  sliver: SliverList.separated(
+                    itemCount: filtered.length,
+                    separatorBuilder: (context, index) => const SizedBox(height: AppSpacing.md),
+                    itemBuilder: (context, index) => _runCard(filtered[index], index),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _summary(List<Map<String, dynamic>> filtered) {
+    double totalKm = 0;
+    double paceWeighted = 0;
+    double paceWeight = 0;
+    var totalSec = 0;
+    for (final item in filtered) {
+      final exercise = item['exercise'] as Map<String, dynamic>? ?? {};
+      final metrics = exercise['metricsSummary'] as Map<String, dynamic>? ?? {};
+      final distMm = metrics['distanceMillimeters'];
+      final km = distMm is num ? distMm / 1000000.0 : null;
+      if (km != null) totalKm += km;
+      final paceSec = metrics['averagePaceSecondsPerMeter'];
+      if (paceSec is num && km != null && paceSec > 0 && km > 0) {
+        paceWeighted += (paceSec * 1000 / 60) * km;
+        paceWeight += km;
+      }
+      final seconds = durationSecondsOf(exercise['activeDuration'] as String?);
+      if (seconds != null) totalSec += seconds.round();
+    }
+    final avgPace = paceWeight > 0 ? paceWeighted / paceWeight : null;
+    final countLabel = filtered.length == 1 ? '1 Lauf' : '${filtered.length} Läufe';
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.lg, AppSpacing.lg, AppSpacing.md),
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.lg),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(countLabel, style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: AppSpacing.md),
+              Row(
+                children: [
+                  RunStat(value: formatKm(totalKm), unit: 'km', label: 'Distanz'),
+                  RunStat(value: formatPace(avgPace), unit: '/km', label: 'Ø Pace'),
+                  RunStat(value: formatClock(totalSec), label: 'Zeit'),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _filterBanner() {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(AppSpacing.lg, 0, AppSpacing.sm, AppSpacing.sm),
+      child: Row(
+        children: [
+          Icon(Icons.filter_alt, size: 18, color: scheme.primary),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Text(
+              _filterLabel(),
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ),
+          TextButton(onPressed: _clearFilters, child: const Text('Zurücksetzen')),
+        ],
+      ),
+    );
+  }
+
+  String _filterLabel() {
+    final parts = <String>[];
+    const days = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+    if (_weekday != null) parts.add(days[_weekday! - 1]);
+    if (_minDistKm != null || _maxDistKm != null) {
+      parts.add('${_minDistKm ?? '–'}–${_maxDistKm ?? '–'} km');
+    }
+    if (_minAvgHr != null || _maxAvgHr != null) {
+      parts.add('${_minAvgHr?.toStringAsFixed(0) ?? '–'}–${_maxAvgHr?.toStringAsFixed(0) ?? '–'} bpm');
+    }
+    if (_minPace != null || _maxPace != null) {
+      parts.add('Pace ${_minPace ?? '–'}–${_maxPace ?? '–'}');
+    }
+    if (_minTemp != null || _maxTemp != null) {
+      parts.add('${_minTemp ?? '–'}–${_maxTemp ?? '–'}°C');
+    }
+    return parts.join(' · ');
+  }
+
+  Widget _selectionBanner() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(AppSpacing.lg, 0, AppSpacing.sm, AppSpacing.xs),
+      child: Row(
+        children: [
+          Text(
+            '${_selected.length} ausgewählt',
+            style: Theme.of(context).textTheme.labelLarge,
+          ),
+          const Spacer(),
+          TextButton(
+            onPressed: () => setState(_selected.clear),
+            child: const Text('Aufheben'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _runCard(Map<String, dynamic> item, int index) {
+    final exercise = item['exercise'] as Map<String, dynamic>? ?? {};
+    final type = (exercise['exerciseType'] ?? '').toString();
+    final name = (exercise['displayName'] ?? '').toString();
+    final interval = exercise['interval'] as Map<String, dynamic>? ?? {};
+    final start = interval['startTime'] as String? ?? '';
+    final metrics = exercise['metricsSummary'] as Map<String, dynamic>? ?? {};
+    final distance = formatKmFromMillimeters(metrics['distanceMillimeters'] as num?);
+    final paceSec = metrics['averagePaceSecondsPerMeter'];
+    final pace = formatPace(paceSec is num ? paceSec * 1000 / 60 : null);
+    final duration = formatDurationRaw(exercise['activeDuration'] as String?);
+    final selected = _selected.contains(index);
+    final exName = item['name'] as String? ?? '';
+    final temp = _temperatures[exName];
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    final title = name.trim().isEmpty ? activityTypeLabel(type) : name;
+
+    return Card(
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppSpacing.radius),
+        side: BorderSide(
+          color: selected ? scheme.primary : scheme.outlineVariant,
+          width: selected ? 2 : 1,
+        ),
+      ),
+      child: InkWell(
+        onTap: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => ExerciseDetailScreen(exercisePoint: item),
+            ),
+          );
+        },
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(4, AppSpacing.md, AppSpacing.lg, AppSpacing.lg),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Checkbox(
+                    value: selected,
+                    onChanged: (value) {
+                      setState(() {
+                        if (value == true) {
+                          _selected.add(index);
+                        } else {
+                          _selected.remove(index);
+                        }
+                      });
+                    },
+                  ),
+                  Expanded(
                     child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Fehler: $_error', textAlign: TextAlign.center),
-                        const SizedBox(height: 16),
-                        ElevatedButton(
-                          onPressed: () => _loadExercises(forceRefresh: true),
-                          child: const Text('Nochmal versuchen'),
+                        Text(
+                          formatRunTimestamp(start),
+                          style: text.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '$title · ${activityTypeLabel(type)}',
+                          style: text.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
                         ),
                       ],
                     ),
                   ),
-                )
-              : filtered.isEmpty
-                  ? Center(child: Text(hasFilters ? 'Keine Läufe passen zu den Filtern' : 'Keine Läufe gefunden'))
-                  : RefreshIndicator(
-                      onRefresh: () => _loadExercises(forceRefresh: true),
-                      child: ListView.builder(
-                        itemCount: filtered.length,
-                        itemBuilder: (context, index) {
-                          final item = filtered[index];
-                          final exercise = item['exercise'] as Map<String, dynamic>? ?? {};
-                          final type = exercise['exerciseType'] ?? 'Unknown';
-                          final name = exercise['displayName'] ?? '';
-                          final interval = exercise['interval'] as Map<String, dynamic>? ?? {};
-                          final start = interval['startTime'] ?? '';
-                          final metrics = exercise['metricsSummary'] as Map<String, dynamic>? ?? {};
-                          final distanceMm = metrics['distanceMillimeters'];
-                          final distanceKm = distanceMm != null ? (distanceMm / 1000000).toStringAsFixed(2) : '-';
-                          final selected = _selected.contains(index);
-                          final exName = item['name'] as String? ?? '';
-                          final temp = _temperatures[exName];
-                          final tempStr = temp != null ? ' · ${temp.toStringAsFixed(0)}°C' : '';
-
-                          return ListTile(
-                            leading: Checkbox(
-                              value: selected,
-                              onChanged: (v) {
-                                setState(() {
-                                  if (v == true) {
-                                    _selected.add(index);
-                                  } else {
-                                    _selected.remove(index);
-                                  }
-                                });
-                              },
-                            ),
-                            title: Text('$type – $name'),
-                            subtitle: Text('$start · $distanceKm km$tempStr'),
-                            selected: selected,
-                            onTap: () {
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (_) => ExerciseDetailScreen(exercisePoint: item),
-                                ),
-                              );
-                            },
-                          );
-                        },
+                  if (temp != null)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: scheme.secondaryContainer,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        '${temp.toStringAsFixed(0)}°C',
+                        style: text.labelLarge?.copyWith(color: scheme.onSecondaryContainer),
                       ),
                     ),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              Padding(
+                padding: const EdgeInsets.only(left: AppSpacing.md),
+                child: Row(
+                  children: [
+                    RunStat(value: distance, unit: 'km', label: 'Distanz'),
+                    RunStat(value: pace, unit: '/km', label: 'Pace'),
+                    RunStat(value: duration, label: 'Zeit'),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MorePage extends StatelessWidget {
+  const _MorePage({
+    required this.runkeeperBusy,
+    required this.onRefresh,
+    required this.onRunkeeperLogin,
+    required this.onRunkeeperSync,
+    required this.onLogout,
+  });
+
+  final bool runkeeperBusy;
+  final VoidCallback onRefresh;
+  final VoidCallback onRunkeeperLogin;
+  final VoidCallback? onRunkeeperSync;
+  final VoidCallback onLogout;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: AppSpacing.contentMaxWidth),
+        child: ListView(
+          padding: const EdgeInsets.all(AppSpacing.lg),
+          children: [
+            Text(
+              'Darstellung',
+              style: text.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            Text(
+              'Dunkel ist voreingestellt. Die Wahl bleibt auf diesem Gerät gespeichert.',
+              style: text.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            ListenableBuilder(
+              listenable: AppThemeController.instance,
+              builder: (context, _) {
+                return SegmentedButton<ThemeMode>(
+                  showSelectedIcon: false,
+                  segments: const [
+                    ButtonSegment(value: ThemeMode.dark, label: Text('Dunkel')),
+                    ButtonSegment(value: ThemeMode.light, label: Text('Hell')),
+                    ButtonSegment(value: ThemeMode.system, label: Text('System')),
+                  ],
+                  selected: {AppThemeController.instance.mode},
+                  onSelectionChanged: (selection) {
+                    AppThemeController.instance.setMode(selection.first);
+                  },
+                );
+              },
+            ),
+            const SizedBox(height: AppSpacing.xl),
+            Text(
+              'Daten',
+              style: text.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            FilledButton.icon(
+              onPressed: onRefresh,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Google aktualisieren'),
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            FilledButton.tonalIcon(
+              onPressed: onRunkeeperLogin,
+              icon: const Icon(Icons.login),
+              label: const Text('Runkeeper einloggen'),
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            OutlinedButton.icon(
+              onPressed: onRunkeeperSync,
+              icon: runkeeperBusy
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.directions_run),
+              label: const Text('Runkeeper jetzt holen'),
+            ),
+            const SizedBox(height: AppSpacing.xxl),
+            OutlinedButton.icon(
+              onPressed: onLogout,
+              style: OutlinedButton.styleFrom(foregroundColor: scheme.error),
+              icon: const Icon(Icons.logout),
+              label: const Text('Abmelden'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -414,97 +806,125 @@ class _FilterSheetState extends State<_FilterSheet> {
   @override
   Widget build(BuildContext context) {
     const days = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
-    return Padding(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
-        left: 16, right: 16, top: 16,
-      ),
-      child: SingleChildScrollView(
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: AppSpacing.contentMaxWidth),
         child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Filter', style: Theme.of(context).textTheme.titleLarge),
-            const SizedBox(height: 12),
-            const Text('Wochentag'),
-            Wrap(
-              spacing: 6,
-              children: [
-                ChoiceChip(
-                  label: const Text('Alle'),
-                  selected: _weekday == null,
-                  onSelected: (_) => setState(() => _weekday = null),
-                ),
-                for (var i = 0; i < 7; i++)
-                  ChoiceChip(
-                    label: Text(days[i]),
-                    selected: _weekday == i + 1,
-                    onSelected: (_) => setState(() => _weekday = i + 1),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.all(AppSpacing.lg),
+                children: [
+                  Text(
+                    'Die Liste zeigt nur Läufe, die alle Angaben erfüllen.',
+                    style: text.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
                   ),
-              ],
+                  const SizedBox(height: AppSpacing.lg),
+                  Text('Wochentag', style: text.titleSmall),
+                  const SizedBox(height: AppSpacing.sm),
+                  Wrap(
+                    spacing: AppSpacing.sm,
+                    runSpacing: AppSpacing.sm,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('Alle'),
+                        selected: _weekday == null,
+                        onSelected: (_) => setState(() => _weekday = null),
+                      ),
+                      for (var i = 0; i < 7; i++)
+                        ChoiceChip(
+                          label: Text(days[i]),
+                          selected: _weekday == i + 1,
+                          onSelected: (_) => setState(() => _weekday = i + 1),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+                  _rangeRow('Distanz (km)', _minDist, _maxDist, 'min', 'max'),
+                  const SizedBox(height: AppSpacing.md),
+                  _rangeRow('Herzfrequenz (bpm)', _minHr, _maxHr, 'min', 'max'),
+                  const SizedBox(height: AppSpacing.md),
+                  _rangeRow('Pace (min/km)', _minPace, _maxPace, 'min', 'max'),
+                  const SizedBox(height: AppSpacing.md),
+                  _rangeRow('Temperatur (°C)', _minTemp, _maxTemp, 'min', 'max'),
+                ],
+              ),
             ),
-            const SizedBox(height: 12),
-            Row(children: [
-              Expanded(child: TextField(controller: _minDist, decoration: const InputDecoration(labelText: 'Distanz min (km)'), keyboardType: TextInputType.number)),
-              const SizedBox(width: 8),
-              Expanded(child: TextField(controller: _maxDist, decoration: const InputDecoration(labelText: 'max'), keyboardType: TextInputType.number)),
-            ]),
-            const SizedBox(height: 8),
-            Row(children: [
-              Expanded(child: TextField(controller: _minHr, decoration: const InputDecoration(labelText: 'HF min (bpm)'), keyboardType: TextInputType.number)),
-              const SizedBox(width: 8),
-              Expanded(child: TextField(controller: _maxHr, decoration: const InputDecoration(labelText: 'max'), keyboardType: TextInputType.number)),
-            ]),
-            const SizedBox(height: 8),
-            Row(children: [
-              Expanded(child: TextField(controller: _minPace, decoration: const InputDecoration(labelText: 'Pace min (min/km)'), keyboardType: TextInputType.number)),
-              const SizedBox(width: 8),
-              Expanded(child: TextField(controller: _maxPace, decoration: const InputDecoration(labelText: 'max'), keyboardType: TextInputType.number)),
-            ]),
-            const SizedBox(height: 8),
-            Row(children: [
-              Expanded(child: TextField(controller: _minTemp, decoration: const InputDecoration(labelText: 'Temp min (°C)'), keyboardType: TextInputType.number)),
-              const SizedBox(width: 8),
-              Expanded(child: TextField(controller: _maxTemp, decoration: const InputDecoration(labelText: 'max'), keyboardType: TextInputType.number)),
-            ]),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                TextButton(
-                  onPressed: () {
-                    setState(() {
-                      _weekday = null;
-                      _minDist.clear(); _maxDist.clear();
-                      _minHr.clear(); _maxHr.clear();
-                      _minPace.clear(); _maxPace.clear();
-                      _minTemp.clear(); _maxTemp.clear();
-                    });
-                  },
-                  child: const Text('Zurücksetzen'),
-                ),
-                const Spacer(),
-                FilledButton(
-                  onPressed: () {
-                    widget.onApply(
-                      _weekday,
-                      _parse(_minDist.text),
-                      _parse(_maxDist.text),
-                      _parse(_minHr.text),
-                      _parse(_maxHr.text),
-                      _parse(_minPace.text),
-                      _parse(_maxPace.text),
-                      _parse(_minTemp.text),
-                      _parse(_maxTemp.text),
-                    );
-                    Navigator.pop(context);
-                  },
-                  child: const Text('Anwenden'),
-                ),
-              ],
+            Padding(
+              padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.sm, AppSpacing.lg, AppSpacing.lg),
+              child: Row(
+                children: [
+                  TextButton(
+                    onPressed: () {
+                      setState(() {
+                        _weekday = null;
+                        _minDist.clear();
+                        _maxDist.clear();
+                        _minHr.clear();
+                        _maxHr.clear();
+                        _minPace.clear();
+                        _maxPace.clear();
+                        _minTemp.clear();
+                        _maxTemp.clear();
+                      });
+                    },
+                    child: const Text('Zurücksetzen'),
+                  ),
+                  const Spacer(),
+                  FilledButton(
+                    onPressed: () {
+                      widget.onApply(
+                        _weekday,
+                        _parse(_minDist.text),
+                        _parse(_maxDist.text),
+                        _parse(_minHr.text),
+                        _parse(_maxHr.text),
+                        _parse(_minPace.text),
+                        _parse(_maxPace.text),
+                        _parse(_minTemp.text),
+                        _parse(_maxTemp.text),
+                      );
+                    },
+                    child: const Text('Anwenden'),
+                  ),
+                ],
+              ),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _rangeRow(String label, TextEditingController min, TextEditingController max, String minLabel, String maxLabel) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: AppSpacing.sm),
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: min,
+                decoration: InputDecoration(labelText: minLabel),
+                keyboardType: TextInputType.number,
+              ),
+            ),
+            const SizedBox(width: AppSpacing.sm),
+            Expanded(
+              child: TextField(
+                controller: max,
+                decoration: InputDecoration(labelText: maxLabel),
+                keyboardType: TextInputType.number,
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }
