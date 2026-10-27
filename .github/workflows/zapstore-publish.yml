@@ -82,6 +82,22 @@ jobs:
             --tag "$VERSION_TAG" \
             --zapstore-yaml zapstore.yaml
 
+      - name: Require an active kind 30509 identity proof
+        # Before zsp publish. --quiet will not create this proof, and relay v2
+        # leaves the listing pending (CDN 404, no queryable 30063/3063) without it.
+        env:
+          VERSION_TAG: ${{ inputs.version }}
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          python3 -m venv /tmp/zapstore-venv
+          /tmp/zapstore-venv/bin/pip install --quiet 'websockets>=13'
+          /tmp/zapstore-venv/bin/python .github/scripts/verify_zapstore_release.py \
+            --require-identity-proof \
+            --metadata /tmp/apk.json \
+            --tag "$VERSION_TAG" \
+            --zapstore-yaml zapstore.yaml
+
       - name: Publish to Zapstore
         timeout-minutes: 15
         env:
@@ -118,7 +134,9 @@ jobs:
             echo "Using persisted NIP-46 client key for bunker ${bunker_pk:0:8}..."
           fi
           # Same invocation as scriptwerk-android. No other flags.
-          # --quiet: no prompts. --verbose: per-event relay lines.
+          # --quiet skips prompts and does not link the signing cert. The previous
+          # step already required an active kind 30509 for this APK.
+          # --verbose: per-event relay lines.
           zsp_log="$RUNNER_TEMP/zsp-publish.log"
           set +e
           timeout 600 "$RUNNER_TEMP/zsp" publish --quiet --verbose zapstore.yaml 2>&1 | tee "$zsp_log"
@@ -145,6 +163,7 @@ jobs:
       - name: Verify APK on CDN and release on the relay
         env:
           VERSION_TAG: ${{ inputs.version }}
+          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
           python3 -m venv /tmp/zapstore-venv
