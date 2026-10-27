@@ -107,7 +107,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _loadTemperatures(runs);
     } catch (e) {
       final msg = e.toString();
-      if (msg.contains('401') || msg.contains('UNAUTHENTICATED')) {
+      if (googleHealthErrorRequiresLogin(e)) {
         await GoogleHealthAuth.logout();
         if (mounted) {
           Navigator.of(context).pushReplacement(

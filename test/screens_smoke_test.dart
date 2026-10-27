@@ -11,6 +11,8 @@ import 'package:run_aggregator/screens/exercise_detail_screen.dart';
 import 'package:run_aggregator/screens/home_screen.dart';
 import 'package:run_aggregator/screens/login_screen.dart';
 import 'package:run_aggregator/services/data_cache.dart';
+import 'package:run_aggregator/services/google_health_auth.dart';
+import 'package:run_aggregator/services/google_health_session.dart';
 import 'package:run_aggregator/theme/app_theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -49,11 +51,13 @@ void main() {
   Future<void> shoot(WidgetTester tester, String name) async {
     if (shotDir == null) return;
     await tester.pump();
-    final boundary = tester.renderObject(find.byKey(const Key('shot'))) as RenderRepaintBoundary;
+    final boundary = tester.renderObject(find.byKey(const Key('shot')))
+        as RenderRepaintBoundary;
     await tester.runAsync(() async {
       final image = await boundary.toImage(pixelRatio: 2);
       final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-      final png = bytes!.buffer.asUint8List(bytes.offsetInBytes, bytes.lengthInBytes);
+      final png =
+          bytes!.buffer.asUint8List(bytes.offsetInBytes, bytes.lengthInBytes);
       await File('$shotDir/$name.png').writeAsBytes(png, flush: true);
       image.dispose();
     });
@@ -157,6 +161,26 @@ void main() {
     await tester.pump();
     await pumpScreen(tester, const HomeScreen());
     await settleHome(tester);
+    expect(find.text('Mit Google Health anmelden'), findsOneWidget);
+
+    GoogleHealthAuth.debugSetSession(
+      GoogleHealthSession(
+        store: _FixedTokenStore(
+          OAuthTokens(
+            accessToken: 'old',
+            refreshToken: 'refresh',
+            accessTokenExpiry: DateTime.utc(2020),
+          ),
+        ),
+        oauth: _OfflineOAuth(),
+        now: () => DateTime.utc(2026),
+      ),
+    );
+    addTearDown(() => GoogleHealthAuth.debugSetSession(null));
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    await pumpScreen(tester, const HomeScreen());
+    await settleHome(tester);
     expect(find.text('Etwas ist schiefgelaufen'), findsOneWidget);
     expect(find.text('Nochmal versuchen'), findsOneWidget);
     await shoot(tester, 'after_home_error');
@@ -200,6 +224,35 @@ void main() {
   });
 }
 
+class _FixedTokenStore implements GoogleTokenStore {
+  _FixedTokenStore(this.tokens);
+
+  OAuthTokens tokens;
+
+  @override
+  Future<void> clear() async {
+    tokens = OAuthTokens.empty;
+  }
+
+  @override
+  Future<OAuthTokens> read() async => tokens;
+
+  @override
+  Future<void> write(OAuthTokens value) async {
+    tokens = value;
+  }
+}
+
+class _OfflineOAuth implements GoogleOAuthApi {
+  @override
+  Future<OAuthTokens?> authorizeInteractive() async => null;
+
+  @override
+  Future<OAuthTokens> refresh(String refreshToken) async {
+    throw GoogleOAuthException('offline');
+  }
+}
+
 List<Map<String, dynamic>> _runs() {
   return [
     _run(
@@ -233,7 +286,8 @@ void _seedHome() {
   for (final run in runs) {
     final exercise = run['exercise'] as Map<String, dynamic>;
     final interval = exercise['interval'] as Map<String, dynamic>;
-    DataCache.set<double>('weather|${run['name']}|${interval['startTime']}', run['temp'] as double);
+    DataCache.set<double>('weather|${run['name']}|${interval['startTime']}',
+        run['temp'] as double);
   }
 }
 
@@ -245,16 +299,21 @@ void _seedDetail(Map<String, dynamic> run) {
   final start = DateTime.parse(startStr);
   final end = DateTime.parse(endStr);
   final minutes = end.difference(start).inMinutes;
-  final km = ((exercise['metricsSummary'] as Map)['distanceMillimeters'] as num) / 1000000.0;
+  final km =
+      ((exercise['metricsSummary'] as Map)['distanceMillimeters'] as num) /
+          1000000.0;
 
-  DataCache.set('distance|$startStr|$endStr', _distancePoints(start, minutes, km));
+  DataCache.set(
+      'distance|$startStr|$endStr', _distancePoints(start, minutes, km));
   DataCache.set('hr|$startStr|$endStr', _hrPoints(start, minutes));
   DataCache.set('route|${run['name']}', _route());
   DataCache.set(
     'runkeeper_hr|${start.toIso8601String()}|${end.toIso8601String()}',
-    List.generate(minutes, (i) => {'time': start.add(Duration(minutes: i)), 'hr': 140 + (i % 6)}),
+    List.generate(minutes,
+        (i) => {'time': start.add(Duration(minutes: i)), 'hr': 140 + (i % 6)}),
   );
-  DataCache.set<double>('weather|${run['name']}|$startStr', (run['temp'] as num).toDouble());
+  DataCache.set<double>(
+      'weather|${run['name']}|$startStr', (run['temp'] as num).toDouble());
 }
 
 Map<String, dynamic> _run({
@@ -290,7 +349,8 @@ Map<String, dynamic> _run({
   };
 }
 
-List<Map<String, dynamic>> _distancePoints(DateTime start, int minutes, double km) {
+List<Map<String, dynamic>> _distancePoints(
+    DateTime start, int minutes, double km) {
   final kmPer = km / minutes;
   return List.generate(minutes, (i) {
     final factor = 0.82 + 0.36 * ((i % 5) / 4);
