@@ -4,7 +4,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import '../format/run_format.dart';
 import '../services/google_health_service.dart';
-import '../services/runkeeper_service.dart';
+import '../services/heart_rate_series.dart';
 import '../theme/app_theme.dart';
 import '../widgets/run_widgets.dart';
 
@@ -39,7 +39,7 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
   bool _loadingRoute = true;
   String? _routeError;
 
-  List<Map<String, dynamic>> _hrPoints = [];
+  List<HeartRateSample> _hrSamples = [];
   bool _loadingHr = true;
   String _hrDebug = '';
   String _hrSource = '';
@@ -146,46 +146,18 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
         return;
       }
 
-      final start = DateTime.tryParse(startStr);
-      final end = DateTime.tryParse(endStr);
-
-      List<Map<String, dynamic>> points = [];
-      String source = 'Google';
-
-      if (start != null && end != null) {
-        final gpxSamples = await RunkeeperService.loadHeartRateSamples(
-          windowStart: start,
-          windowEnd: end,
-        );
-        final filtered = gpxSamples.where((s) {
-          final t = s['time'] as DateTime?;
-          final hr = s['hr'] as int?;
-          if (t == null || hr == null) return false;
-          return !t.isBefore(start) && !t.isAfter(end) && hr >= 40 && hr <= 220;
-        }).map((s) => {
-          'time': (s['time'] as DateTime).toUtc().toIso8601String(),
-          'bpm': s['hr'],
-        }).toList();
-
-        if (filtered.length >= 10) {
-          points = filtered;
-          source = 'Runkeeper (Brustgurt)';
-        }
-      }
-
-      if (points.isEmpty) {
-        points = await GoogleHealthService.getHeartRatePoints(
-          startTime: startStr,
-          endTime: endStr,
-        );
-        source = 'Google Health';
-      }
+      final series = await loadActivityHeartRate(
+        startTime: startStr,
+        endTime: endStr,
+      );
 
       setState(() {
-        _hrPoints = points;
+        _hrSamples = series.samples;
         _loadingHr = false;
-        _hrSource = source;
-        _hrDebug = 'HF-Punkte: ${points.length} ($source)';
+        _hrSource = series.source;
+        _hrDebug = series.source.isEmpty
+            ? 'HF-Punkte: ${series.samples.length}'
+            : 'HF-Punkte: ${series.samples.length} (${series.source})';
       });
     } catch (e) {
       setState(() {
@@ -394,6 +366,16 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
     return splits;
   }
 
+  String _splitHeartRateLabel(Map<String, dynamic> split) {
+    if (_loadingHr) return '…';
+    final start = DateTime.tryParse(split['startTime']?.toString() ?? '');
+    final end = DateTime.tryParse(split['endTime']?.toString() ?? '');
+    if (start == null || end == null) return missingAverageHeartRate;
+    return formatAverageHeartRate(
+      averageHeartRateForSplit(samples: _hrSamples, start: start, end: end),
+    );
+  }
+
   Widget _buildMap() {
     if (_loadingRoute) {
       return const SizedBox(
@@ -485,7 +467,7 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
   }
 
   Widget _buildRawChart() {
-    if (_hrPoints.isEmpty && _distancePoints.isEmpty) {
+    if (_hrSamples.isEmpty && _distancePoints.isEmpty) {
       return const SizedBox.shrink();
     }
 
@@ -495,14 +477,10 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
     final start = DateTime.tryParse(startStr);
     if (start == null) return const SizedBox.shrink();
 
-    final rawHr = <FlSpot>[];
-    for (final p in _hrPoints) {
-      final t = DateTime.tryParse(p['time'] ?? '');
-      final bpm = (p['bpm'] as num?)?.toDouble();
-      if (t == null || bpm == null || bpm < 40 || bpm > 220) continue;
-      final minutes = t.difference(start).inSeconds / 60.0;
-      if (minutes >= 0) rawHr.add(FlSpot(minutes, bpm));
-    }
+    final rawHr = <FlSpot>[
+      for (final point in heartRateCurve(_hrSamples, start))
+        FlSpot(point.minutes, point.bpm),
+    ];
     var hrSpots = _smooth(rawHr, maxJump: 0.25);
 
     final rawSpeed = <FlSpot>[];
@@ -841,22 +819,39 @@ class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
                   final kmh = (s['kmh'] as num?)?.toStringAsFixed(1) ?? '-';
                   final dur = _formatDuration((s['durationSec'] as num?)?.toDouble());
                   final dist = (s['distanceKm'] as num?)?.toStringAsFixed(1) ?? '-';
+                  final hrText = _splitHeartRateLabel(s);
+                  final hrKnown = hrText != missingAverageHeartRate && hrText != '…';
                   return Padding(
                     padding: const EdgeInsets.only(bottom: AppSpacing.sm),
                     child: Card(
                       child: Padding(
                         padding: const EdgeInsets.all(AppSpacing.lg),
-                        child: Row(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            CircleAvatar(
-                              backgroundColor: scheme.secondaryContainer,
-                              foregroundColor: scheme.onSecondaryContainer,
-                              child: Text('${s['index']}', style: text.titleMedium),
+                            Row(
+                              children: [
+                                CircleAvatar(
+                                  backgroundColor: scheme.secondaryContainer,
+                                  foregroundColor: scheme.onSecondaryContainer,
+                                  child: Text('${s['index']}', style: text.titleMedium),
+                                ),
+                                const SizedBox(width: AppSpacing.md),
+                                RunStat(value: pace, unit: '/km', label: '$dist km'),
+                                RunStat(value: kmh, unit: 'km/h', label: 'Tempo'),
+                                RunStat(value: dur, label: 'Zeit'),
+                              ],
                             ),
-                            const SizedBox(width: AppSpacing.md),
-                            RunStat(value: pace, unit: '/km', label: '$dist km'),
-                            RunStat(value: kmh, unit: 'km/h', label: 'Tempo'),
-                            RunStat(value: dur, label: 'Zeit'),
+                            const SizedBox(height: AppSpacing.sm),
+                            Padding(
+                              padding: const EdgeInsets.only(left: 40 + AppSpacing.md),
+                              child: RunStat(
+                                value: hrText,
+                                unit: hrKnown ? 'bpm' : null,
+                                label: 'Durchschnitts-HF',
+                                expand: false,
+                              ),
+                            ),
                           ],
                         ),
                       ),

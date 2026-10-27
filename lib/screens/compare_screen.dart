@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../format/run_format.dart';
 import '../services/google_health_service.dart';
+import '../services/heart_rate_series.dart';
 import '../services/weather_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/run_widgets.dart';
@@ -21,6 +22,7 @@ class _CompareScreenState extends State<CompareScreen> {
   bool _loading = true;
   final List<List<FlSpot>> _paceSeries = [];
   final List<List<FlSpot>> _hrSeries = [];
+  final List<String> _hrSources = [];
   final List<String> _labels = [];
   final List<double?> _temps = [];
   // Cumulative km at each pace spot index (parallel to _paceSeries)
@@ -204,17 +206,21 @@ class _CompareScreenState extends State<CompareScreen> {
           }
         }
 
-        final hrPoints = await GoogleHealthService.getHeartRatePoints(
-          startTime: startStr,
-          endTime: endStr,
-        );
-        for (final p in hrPoints) {
-          final t = DateTime.tryParse(p['time'] ?? '');
-          final bpm = _toDouble(p['bpm']);
-          if (t == null || bpm == null || bpm < 40 || bpm > 220) continue;
-          final minutes = t.difference(start).inSeconds / 60.0;
-          if (minutes >= 0) hrSpots.add(FlSpot(minutes, bpm));
+        try {
+          final hr = await loadActivityHeartRate(
+            startTime: startStr,
+            endTime: endStr,
+          );
+          _hrSources.add(hr.source);
+          for (final point in heartRateCurve(hr.samples, start)) {
+            hrSpots.add(FlSpot(point.minutes, point.bpm));
+          }
+        } catch (_) {
+          // Pace still compares if heart rate cannot be loaded.
+          _hrSources.add('');
         }
+      } else {
+        _hrSources.add('');
       }
 
       _paceSeries.add(paceSpots);
@@ -224,7 +230,12 @@ class _CompareScreenState extends State<CompareScreen> {
     if (mounted) setState(() => _loading = false);
   }
 
-  Widget _buildOverlayChart(List<List<FlSpot>> series, String yLabel, {bool isHr = false}) {
+  Widget _buildOverlayChart(
+    List<List<FlSpot>> series,
+    String yLabel, {
+    bool isHr = false,
+    List<String> notes = const [],
+  }) {
     final scheme = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
     final axis = text.labelSmall?.copyWith(color: scheme.onSurfaceVariant);
@@ -238,10 +249,20 @@ class _CompareScreenState extends State<CompareScreen> {
 
     final allX = series.expand((s) => s.map((p) => p.x));
     final allY = series.expand((s) => s.map((p) => p.y));
-    final minX = allX.isEmpty ? 0.0 : allX.reduce((a, b) => a < b ? a : b);
-    final maxX = allX.isEmpty ? 1.0 : allX.reduce((a, b) => a > b ? a : b);
-    final minY = allY.isEmpty ? 0.0 : allY.reduce((a, b) => a < b ? a : b);
-    final maxY = allY.isEmpty ? 1.0 : allY.reduce((a, b) => a > b ? a : b);
+    var minX = allX.isEmpty ? 0.0 : allX.reduce((a, b) => a < b ? a : b);
+    var maxX = allX.isEmpty ? 1.0 : allX.reduce((a, b) => a > b ? a : b);
+    var minY = allY.isEmpty ? 0.0 : allY.reduce((a, b) => a < b ? a : b);
+    var maxY = allY.isEmpty ? 1.0 : allY.reduce((a, b) => a > b ? a : b);
+    // A flat series (one sample, or a steady heart rate) still needs a span.
+    if ((maxX - minX).abs() < 0.01) {
+      minX -= 0.5;
+      maxX += 0.5;
+    }
+    if ((maxY - minY).abs() < (isHr ? 1 : 0.1)) {
+      final bump = isHr ? 5.0 : 0.5;
+      minY -= bump;
+      maxY += bump;
+    }
     final pad = (maxY - minY) * 0.1;
     final grid = scheme.outlineVariant.withValues(alpha: 0.45);
 
@@ -261,6 +282,17 @@ class _CompareScreenState extends State<CompareScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (notes.any((note) => note.isNotEmpty))
+          Padding(
+            padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+            child: Text(
+              'Brustgurt: ${[
+                for (var i = 0; i < notes.length; i++)
+                  if (notes[i].isNotEmpty && i < _labels.length) _labels[i],
+              ].join(', ')}',
+              style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ),
         Wrap(
           spacing: 12,
           runSpacing: 8,
@@ -561,7 +593,15 @@ class _CompareScreenState extends State<CompareScreen> {
                     const SizedBox(height: AppSpacing.lg),
                     SectionCard(
                       title: 'HF-Verlauf',
-                      child: _buildOverlayChart(_displayHr, 'bpm', isHr: true),
+                      child: _buildOverlayChart(
+                        _displayHr,
+                        'bpm',
+                        isHr: true,
+                        notes: [
+                          for (final source in _hrSources)
+                            source == HeartRateSources.chestStrap ? 'Brustgurt' : '',
+                        ],
+                      ),
                     ),
                   ],
                 ),
