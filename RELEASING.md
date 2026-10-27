@@ -1,6 +1,6 @@
 # Release auf ZAPstore
 
-Nächster Stand in `pubspec.yaml`: `1.0.5+2005`. Die Zahl nach `+` ist der Android-`versionCode`. Sie muss über **2004** bleiben und bei jedem Release steigen. Auf dem Relay liegen schon versionCode 2001 (1.0.0), 2003 (1.0.3) und 2004 (1.0.4, arm64-Split). Ein kleinerer Code ist kein Update.
+Nächster Stand in `pubspec.yaml`: `1.0.7+2007`. Die Zahl nach `+` ist der Android-`versionCode`. Sie muss über **2004** bleiben und bei jedem Release steigen. Auf dem Relay liegen schon versionCode 2001 (1.0.0), 2003 (1.0.3) und 2004 (1.0.4, arm64-Split). Ein kleinerer Code ist kein Update.
 
 `flutter build apk --split-per-abi` nicht verwenden. Flutter setzt den Code dann auf `ABI * 1000 + Buildnummer` (arm64 = 2000 + N). Genau so sind 2001, 2003 und 2004 entstanden. Der Workflow baut ein universelles APK und bricht ab, wenn der `versionCode` nicht die Buildnummer aus der pubspec ist oder nicht über 2004 liegt.
 
@@ -11,7 +11,7 @@ Lokales Signieren und der SHA-1 für Google stehen in `RELEASE.md`.
 1. In `pubspec.yaml` die Version anheben, committen und auf `main` mergen.
 2. GitHub → Actions → **Release** → Run workflow.
    - Branch: `main`
-   - `version`: `v1.0.5` (muss zum Namen in der pubspec passen)
+   - `version`: `v1.0.7` (muss zum Namen in der pubspec passen)
    - `publish_zapstore`: an
 3. Der Job `build` baut die APK und legt das GitHub-Release an.
 4. Der Job `publish` ruft **Publish to ZAPstore** auf.
@@ -22,7 +22,7 @@ Das Release nicht selbst im GitHub-UI anlegen und auf einen zweiten Workflow war
 
 Wenn das GitHub-Release schon existiert (Build grün, Publish rot):
 
-Actions → **Publish to ZAPstore** → Run workflow, Branch `main`, `version` z.B. `v1.0.5`.
+Actions → **Publish to ZAPstore** → Run workflow, Branch `main`, `version` z.B. `v1.0.7`.
 
 Der Lauf lädt `app-release.apk` dieses Tags nach `build/app/outputs/flutter-apk/app-release.apk`, veröffentlicht die `zapstore.yaml` aus dem Repo und prüft CDN plus Relay. Er baut nicht neu und nimmt keine Split-APK. In **Release** lässt sich der Job `publish` auch einzeln erneut starten; das ist derselbe Workflow.
 

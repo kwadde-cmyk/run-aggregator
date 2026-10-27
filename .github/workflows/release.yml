@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Git tag, e.g. v1.0.5. Must match pubspec.yaml (1.0.5+2005)."
+        description: "Git tag, e.g. v1.0.7. Must match pubspec.yaml (1.0.7+2007)."
         required: true
         type: string
       publish_zapstore:
