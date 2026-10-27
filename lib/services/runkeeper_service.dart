@@ -206,27 +206,7 @@ class RunkeeperService {
 
       filesParsed++;
       final xml = await entity.readAsString();
-      final doc = XmlDocument.parse(xml);
-
-      for (final pt in doc.findAllElements('trkpt')) {
-        final timeEl = pt.findElements('time').firstOrNull;
-        if (timeEl == null) continue;
-
-        XmlElement? hrEl;
-        for (final el in pt.descendants.whereType<XmlElement>()) {
-          if (el.name.local == 'hr') {
-            hrEl = el;
-            break;
-          }
-        }
-        if (hrEl == null) continue;
-
-        final t = DateTime.tryParse(timeEl.innerText);
-        final hr = int.tryParse(hrEl.innerText);
-        if (t != null && hr != null) {
-          samples.add({'time': t, 'hr': hr});
-        }
-      }
+      samples.addAll(heartRateSamplesFromGpxXml(xml));
     }
 
     samples.sort((a, b) => (a['time'] as DateTime).compareTo(b['time'] as DateTime));
@@ -235,4 +215,38 @@ class RunkeeperService {
     DataCache.set(cacheKey, samples);
     return samples;
   }
+}
+
+/// Heart-rate samples from one Runkeeper GPX file.
+///
+/// Track points use the GPX namespace and the strap rate lives in a Garmin
+/// `gpxtpx:hr` extension, so matching is by local name. Decimal values such as
+/// `149.5` are kept; the old `int.tryParse` dropped them.
+List<Map<String, dynamic>> heartRateSamplesFromGpxXml(String xml) {
+  final doc = XmlDocument.parse(xml);
+  final samples = <Map<String, dynamic>>[];
+
+  for (final pt in doc.descendants.whereType<XmlElement>()) {
+    if (pt.name.local != 'trkpt') continue;
+
+    String? timeText;
+    String? hrText;
+    for (final el in pt.descendants.whereType<XmlElement>()) {
+      final local = el.name.local;
+      if (local == 'time' && timeText == null) {
+        timeText = el.innerText;
+      } else if (local == 'hr' && hrText == null) {
+        hrText = el.innerText;
+      }
+      if (timeText != null && hrText != null) break;
+    }
+    if (timeText == null || hrText == null) continue;
+
+    final time = DateTime.tryParse(timeText.trim());
+    final hr = double.tryParse(hrText.trim());
+    if (time == null || hr == null) continue;
+    samples.add({'time': time, 'hr': hr});
+  }
+
+  return samples;
 }
